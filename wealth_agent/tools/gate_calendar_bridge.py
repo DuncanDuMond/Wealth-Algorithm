@@ -1,97 +1,80 @@
-#!/usr/bin/env python3
 """
-gate_calendar_bridge.py
-════════════════════════════════════════════════════════════════════════════
-Now wired directly to the real calendar_bridge.py (uploaded and extended in
-place -- see BOOST_DAY_GATE and the gate_info/day_gate params on
-apply_cosmic_boosts() there). This file computes the three pieces that
-extended function needs and hands them off:
+gate_calendar_bridge.py — Day Gate computation + boost orchestration.
 
-    day_gate()             -- today's Sun-Gate (+ cosmic_calendar's card, for context)
-    apply_all_cosmic_boosts() -- orchestrates cosmic_info + gate_info + day_gate
-                                 into one call to calendar_bridge.apply_cosmic_boosts()
+Adapted from your uploaded gate_calendar_bridge.py to call the real
+tools/chart.py and tools/calendar_bridge.py rather than a standalone
+wealth_algorithm.py -- the underlying logic (Day Gate = the Gate the Sun
+sidereally occupies on a civil date) is unchanged.
 
-gate_boost_weights() (the standalone {body: multiplier} view) is kept
-as-is for lighter use -- e.g. the wealth_agent tool, or anywhere you want
-just the day-gate effect without running a full score_dict through the
-scoring pipeline first.
+Concept -- "Day Gate": distinct in kind from the other two boost tiers.
+Month-ruler and suit-element both compare a chart against ITS OWN birth
+date's cosmic-calendar position. Day Gate instead compares a chart against
+the Sun's CURRENTLY TRANSITING Gate -- "is this chart in resonance with
+today" rather than "is this chart in resonance with its own birth
+circumstances." A body in the chart whose own Gate matches today's Day
+Gate earns the boost. Boost size: BOOST_DAY_GATE = 1.15 (calendar_bridge.py).
 
-Concept — "Day Gate": the Gate the Sun sidereally occupies on a civil date.
-This isn't an invented mechanic — it's the same machinery Human Design
-already uses to find a person's own Sun gate, just pointed at a calendar
-date instead of a birth date. A body in the chart whose own Gate matches
-the day's Sun-Gate earns the boost, on the same logic as a planet echoing
-its month's ruler: alignment between "what the day itself is" and "where a
-body sits" is what triggers each of these three tiers.
-
-Boost size: BOOST_DAY_GATE = 1.15 (set in calendar_bridge.py, next to the
-other two), matching the month-ruler tier's size — landing on the Sun's one
-current Gate out of 64 is a tighter target than either existing category.
-
-cosmic_calendar.py's card/suit is surfaced in print_day_gate() purely for
-context — the day-gate boost itself is driven by the Sun's real sidereal
-position, not the card table; the card/suit tier is the existing
-SUIT_PLANET_GROUPS mechanism in calendar_bridge.py, untouched here.
-
-Usage       : python gate_calendar_bridge.py                (today's Day Gate)
-              python gate_calendar_bridge.py 2026-12-25      (a specific date)
-════════════════════════════════════════════════════════════════════════════
+House: day_gate() cannot report the Sun's House right now.
+wealth_algorithm.py (as uploaded) has no house_for_longitude() -- see
+tools/human_design_gates.py's module docstring for the same gap. Returns
+"house": None with a note rather than fabricating one.
 """
 
-import sys
-from datetime import date, datetime
+from __future__ import annotations
+
+import datetime as _dt
 from typing import Dict, Optional
 
-import calendar_bridge as cb
-import human_design_gates as hdg
-import wealth_algorithm as wa
+from . import calendar_bridge as cb
+from . import human_design_gates as hdg
+from .chart import calc_planets, get_julian_day, setup_ephemeris
 
 
-def day_gate(greg_date: date, hour: int = 12, ephe_path: Optional[str] = None) -> dict:
-    """
-    The Gate (+ Line) the Sun sidereally occupies on a civil date, with that
-    date's cosmic_calendar card attached for context.  `hour` sets the UTC
-    hour used for the Sun position (default noon — the Sun moves <1° across
-    a day, far less than a 5.625° gate width, so this choice barely matters
-    except right at a gate-boundary crossing).
-    """
-    wa.setup_ephemeris(ephe_path)
-    dt = datetime(greg_date.year, greg_date.month, greg_date.day, hour, 0, 0)
-    jd = wa.get_julian_day(dt)
-    lons, _retro = wa.calc_planets(jd, sidereal=True)
+def day_gate(greg_date: _dt.date, hour: int = 12) -> dict:
+    """The Gate (+ Line) the Sun sidereally occupies on a civil date, with
+    that date's cosmic_calendar card attached for context. `hour` sets the
+    UTC hour used for the Sun position (default noon -- the Sun moves <1deg
+    across a day, far less than a 5.625deg gate width, so this barely
+    matters except right at a gate-boundary crossing)."""
+    setup_ephemeris()
+    jd = get_julian_day(greg_date.year, greg_date.month, greg_date.day, float(hour))
+    lons, _retro, errors = calc_planets(jd, sidereal=True)
+
+    if "Sun" not in lons:
+        return {"error": f"Could not compute Sun position for {greg_date.isoformat()}: {errors}"}
+
     sun_gate = hdg.gate_for_longitude(lons["Sun"])
-
     cosmic_info = cb.date_to_cosmic_raw(greg_date)
     card = cosmic_info["card"] if cosmic_info else None
 
     return {
-        "date":            greg_date.isoformat(),
-        "sun_sid_lon":     sun_gate["sid_lon"],
-        "gate":            sun_gate["gate"],
-        "line":            sun_gate["line"],
-        "element":         sun_gate["element"],
-        "symbol":          sun_gate["symbol"],
-        "hexagram_hanzi":  sun_gate["hexagram_hanzi"],
+        "date": greg_date.isoformat(),
+        "sun_sid_lon": sun_gate["sid_lon"],
+        "house": None,  # wealth_algorithm.py has no house system yet -- see module docstring
+        "gate": sun_gate["gate"],
+        "line": sun_gate["line"],
+        "element": sun_gate["element"],
+        "symbol": sun_gate["symbol"],
+        "hexagram_hanzi": sun_gate["hexagram_hanzi"],
         "hexagram_pinyin": sun_gate["hexagram_pinyin"],
-        "card":            card,   # (suit_symbol, value) or None (Leap Day edge case)
+        "card": card,  # (suit_symbol, value) or None (Leap Day edge case)
+        "card_display": cb.card_str(card) if card else None,
     }
 
 
 def gate_boost_weights(
     chart_gate_info: Dict[str, dict],
-    greg_date: date,
+    greg_date: _dt.date,
     boost: float = 1.15,
     hour: int = 12,
-    ephe_path: Optional[str] = None,
 ) -> Dict[str, float]:
-    """
-    {body: multiplier} — `boost` where a body's own Gate matches the day's
-    Sun-Gate, else 1.0 (no effect). `chart_gate_info` is exactly what
-    human_design_gates.bodies_to_gates() returns. Lighter-weight than
-    apply_all_cosmic_boosts() below: no score_dict / bodies_involved
-    filtering, just the raw gate match per body.
-    """
-    today_gate = day_gate(greg_date, hour=hour, ephe_path=ephe_path)["gate"]
+    """{body: multiplier} -- `boost` where a body's own Gate matches the
+    day's Sun-Gate, else 1.0. `chart_gate_info` is exactly what
+    human_design_gates.bodies_to_gates() returns."""
+    today = day_gate(greg_date, hour=hour)
+    if "error" in today:
+        return {body: 1.0 for body in chart_gate_info}
+    today_gate = today["gate"]
     return {
         body: (boost if g["gate"] == today_gate else 1.0)
         for body, g in chart_gate_info.items()
@@ -101,38 +84,30 @@ def gate_boost_weights(
 def apply_all_cosmic_boosts(
     score_dict: dict,
     lons: Dict[str, float],
-    greg_date: date,
+    birth_greg_date: _dt.date,
+    as_of_date: Optional[_dt.date] = None,
     hour: int = 12,
-    ephe_path: Optional[str] = None,
 ) -> dict:
-    """
-    One-call version of calendar_bridge.apply_cosmic_boosts() that also
-    supplies the day-gate tier: computes cosmic_info, this chart's
-    gate_info (from `lons`, e.g. from wealth_algorithm.all_body_positions),
-    and today's Sun-Gate, then applies all three boost tiers -- month
-    ruler, suit element, and day gate -- in one pass.
-    """
-    cosmic_info = cb.date_to_cosmic_raw(greg_date)
-    if cosmic_info is None:
-        raise ValueError(f"No cosmic position for {greg_date}")
+    """One-call version of calendar_bridge.apply_cosmic_boosts() that also
+    supplies the day-gate tier. cosmic_info (month ruler / suit element)
+    is evaluated at `birth_greg_date` (the chart's own birth date, matching
+    the other two tiers); the day-gate tier is evaluated at `as_of_date`
+    (defaults to today) since it's a transit comparison, not a birth-data
+    comparison -- see module docstring.
+
+    Uses calendar_bridge.date_to_cosmic_day() (the public, label-based,
+    JSON-safe wrapper) rather than date_to_cosmic_raw() -- the raw form
+    carries a live datetime.date under 'greg' that isn't JSON-serializable,
+    which would otherwise break the tool_result payload the agent loop
+    sends back to the API."""
+    cosmic_info = cb.date_to_cosmic_day(birth_greg_date.isoformat())
+    if "error" in cosmic_info:
+        raise ValueError(f"No cosmic position for {birth_greg_date}: {cosmic_info['error']}")
 
     gate_info = hdg.bodies_to_gates(lons)
-    today_gate = day_gate(greg_date, hour=hour, ephe_path=ephe_path)["gate"]
+    today = day_gate(as_of_date or _dt.date.today(), hour=hour)
+    today_gate = today.get("gate")
 
     return cb.apply_cosmic_boosts(
         score_dict, cosmic_info, gate_info=gate_info, day_gate=today_gate
     )
-
-
-def print_day_gate(greg_date: date, hour: int = 12) -> None:
-    d = day_gate(greg_date, hour=hour)
-    card_str = f"{d['card'][1]}{d['card'][0]}" if d["card"] else "\u2014"
-    print(f"\n  {d['date']}   Card: {card_str}   \u2192   "
-          f"Day Gate {d['gate']}.{d['line']}  \u00b7  "
-          f"{d['element']} ({d['symbol']})  \u00b7  "
-          f"{d['hexagram_hanzi']} ({d['hexagram_pinyin']})\n")
-
-
-if __name__ == "__main__":
-    target = date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else date.today()
-    print_day_gate(target)
