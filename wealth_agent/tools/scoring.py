@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .chart import NatalChart, STAR_CATALOG, SIGNS_12
 
@@ -263,16 +263,29 @@ class WealthScoreResult:
     dignity_log: List[dict] = field(default_factory=list)
     is_day_chart: bool = True
     boosts_applied: List[str] = field(default_factory=list)
+    numerology_boost: float = 0.0
 
 
-def score_wealth(chart: NatalChart) -> WealthScoreResult:
-    """Compute the full wealth score for a NatalChart: aspects + dignities,
-    normalized to 0-100 with a rating label. This is score_aspects() +
-    score_dignities() + normalize() + rating_label() from your source,
-    wired directly to the NatalChart produced by chart.get_natal_chart()."""
-    asp_total, asp_log = score_aspects(chart.positions, chart.weights, chart.star_positions)
-    dig_total, dig_log = score_dignities(chart.positions, chart.weights, chart.body_info)
-    raw = asp_total + dig_total
+def finalize_wealth_score(
+    asp_total: float, dig_total: float,
+    asp_log: List[dict], dig_log: List[dict],
+    is_day: bool, numerology_boost: float = 0.0,
+) -> WealthScoreResult:
+    """The raw-sum + normalize + package step, split out from score_wealth()
+    so a caller that needs numerology can compute score_aspects()/
+    score_dignities() once, derive the numerology boost from THOSE logs
+    (numerology.py's own design: it scales each cipher's ruling planet's
+    already-computed aspect/dignity contribution, it doesn't compute
+    anything independently), then finalize -- without score_wealth()
+    silently recomputing aspects/dignities a second time to do it.
+
+    raw = asp_total + dig_total + numerology_boost, matching your source's
+    main(): `raw = asp_score + dig_bonus + num_boost`. This is additive,
+    added BEFORE normalize() -- unlike the Gate/Typology/Calendar boost
+    tiers in calendar_bridge.py and typology.py, which multiply the
+    already-normalized 0-100 score. Different mechanism because that's
+    what your source actually does, not a stylistic choice on this end."""
+    raw = asp_total + dig_total + numerology_boost
     norm = normalize(raw)
     return WealthScoreResult(
         raw_score=round(raw, 3),
@@ -280,17 +293,44 @@ def score_wealth(chart: NatalChart) -> WealthScoreResult:
         rating=rating_label(norm),
         aspect_log=asp_log,
         dignity_log=dig_log,
-        is_day_chart=chart.is_day,
+        is_day_chart=is_day,
+        numerology_boost=round(numerology_boost, 3),
     )
 
 
-def score_result_to_dict(result: WealthScoreResult) -> dict:
+def score_wealth(chart: NatalChart, numerology_boost: float = 0.0) -> WealthScoreResult:
+    """Compute the full wealth score for a NatalChart: aspects + dignities
+    (+ optional numerology_boost, additive, pre-normalization), normalized
+    to 0-100 with a rating label. Convenience wrapper around
+    score_aspects() + score_dignities() + finalize_wealth_score() for
+    callers that don't need the intermediate logs themselves -- if you do
+    (e.g. to compute a numerology boost from them first), call those
+    three directly instead of this, to avoid computing aspects/dignities
+    twice."""
+    asp_total, asp_log = score_aspects(chart.positions, chart.weights, chart.star_positions)
+    dig_total, dig_log = score_dignities(chart.positions, chart.weights, chart.body_info)
+    return finalize_wealth_score(asp_total, dig_total, asp_log, dig_log, chart.is_day, numerology_boost)
+
+
+def score_result_to_dict(result: WealthScoreResult, max_aspect_log: Optional[int] = None) -> dict:
+    """max_aspect_log caps how many aspect_log entries are included (already
+    sorted by |contrib| descending, so capping keeps the strongest hits).
+    None (default) returns everything -- used for direct/analytical callers
+    like main.py's --direct mode. The agent dispatch passes a cap, since
+    the 30-star catalog produces ~200 aspect hits per chart and the full
+    log would otherwise be re-sent as input tokens on every subsequent
+    turn of the conversation."""
+    full_log = result.aspect_log
+    truncated = max_aspect_log is not None and len(full_log) > max_aspect_log
     return {
         "raw_score": result.raw_score,
         "normalized_score": result.normalized_score,
         "rating": result.rating,
         "is_day_chart": result.is_day_chart,
-        "aspect_log": result.aspect_log,
+        "aspect_log": full_log[:max_aspect_log] if truncated else full_log,
+        "aspect_log_total_count": len(full_log),
+        "aspect_log_truncated": truncated,
         "dignity_log": result.dignity_log,
+        "numerology_boost": result.numerology_boost,
         "boosts_applied": result.boosts_applied,
     }
