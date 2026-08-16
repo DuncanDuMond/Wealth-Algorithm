@@ -186,7 +186,7 @@ def card_str(card: Tuple[str, str]) -> str:
 BOOST_MONTH_RULER = 1.15   # matches what you described building previously
 BOOST_SUIT_ELEMENT = 1.10  # matches what you described building previously
 BOOST_DAY_GATE = 1.15      # new tier -- see apply_cosmic_boosts() and
-                           # gate_calendar_bridge.py's day_gate(). Matches
+                           # tools/gate_calendar_bridge.py's day_gate(). Matches
                            # the month-ruler tier's size: landing on the
                            # Sun's one current Gate out of 64 is a tighter
                            # target than either existing category.
@@ -255,8 +255,7 @@ def apply_cosmic_boosts(
       day_gate  = gate_calendar_bridge.day_gate(greg_date)["gate"]  # today's Sun-Gate
     Deliberately NOT imported here -- calendar_bridge.py stays free of any
     astrology-module dependency; the caller supplies already-computed data,
-    same as it already does for score_dict and cosmic_info.
-    """
+    same as it already does for score_dict and cosmic_info."""
     result = dict(score_dict)
     boosts_applied = list(result.get("boosts_applied", []))
     boosted_score = result["normalized_score"]
