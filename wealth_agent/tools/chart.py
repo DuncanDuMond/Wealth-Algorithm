@@ -95,7 +95,7 @@ COMPUTED_WEIGHTS: Dict[str, int] = {
 }
 
 # ---------------------------------------------------------------------------
-# FIXED STAR CATALOG -- verbatim 18-star list + fallback names.
+# FIXED STAR CATALOG -- verbatim 30-star/deep-space-point list + fallback names.
 # ---------------------------------------------------------------------------
 STAR_CATALOG: Dict[str, int] = {
     "Taygeta":        4, "Arcturus":       7, "Sirius":         9,
@@ -104,6 +104,19 @@ STAR_CATALOG: Dict[str, int] = {
     "Regulus":        9, "Scheat":         3, "Sabik":          4,
     "Rasalhague":     4, "Kaus Australis": 6, "Vega":           7,
     "Altair":         6, "Sadalsuud":      6, "Zuben Elgenubi": 5,
+    # -- added: requested stars + deep-space points --
+    "Castor":                 6,   # al Gem
+    "Pollux":                 6,   # be Gem
+    "Spica":                  9,   # al Vir -- wealth/abundance star (wheat sheaf)
+    "Hamal":                  5,   # al Ari
+    "Acubens":                3,   # al Cnc -- faint (mag ~4.25), traditionally ill-favored
+    "Deneb Algedi":           5,   # de Cap
+    "Ankaa":                  6,   # al Phe -- the Phoenix: rebirth/transformation of fortune
+    "Deneb":                  7,   # al Cyg -- matches Vega/Altair, its Summer Triangle companions
+    "Alrescha":               4,   # al Psc
+    "Galactic Center":        8,   # SgrA* -- direct sefstars.txt entry, no fallback needed
+    "Super Galactic Center":  5,   # M87 in Virgo -- niche vs. Galactic Center; see STAR_FALLBACKS
+    "Solar Apex":             5,   # LSR apex, ~RA 18h04m Dec+30 (Hercules); see STAR_FALLBACKS
 }
 
 STAR_FALLBACKS: Dict[str, str] = {
@@ -111,6 +124,10 @@ STAR_FALLBACKS: Dict[str, str] = {
     "Kaus Australis": "Kaus Austr",
     "Zuben Elgenubi": "Zuben Elge",
     "Taygeta":        "19Tau",
+    # sefstars.txt stores these two under different catalog names; both
+    # verified directly against the downloaded file before adding here.
+    "Solar Apex":            "Apex",        # file's own comment: "the solar apex, or the Apex of the Sun's Way"
+    "Super Galactic Center": "Messier 87",  # file's own comment credits this to astrologer Philip Sedgwick
 }
 
 # ---------------------------------------------------------------------------
@@ -228,7 +245,7 @@ def _fetch_star(name: str, jd: float, flags: int) -> Optional[float]:
 
 
 def calc_stars(jd: float) -> Tuple[Dict[str, float], List[str]]:
-    """Ecliptic longitudes for all 18 catalog fixed stars.
+    """Ecliptic longitudes for all 30 catalog fixed stars/deep-space points.
     Returns (positions, names_not_resolved)."""
     _ensure_ephemeris()
     flags = swe.FLG_SWIEPH
@@ -286,7 +303,15 @@ class NatalChart:
     """Agent-facing wrapper around all_body_positions() + calc_stars().
     birth_date/time/lat/lon are kept for cache keys and calendar-bridge
     date lookups -- they aren't part of your original script's return
-    values, which only needed the Julian day."""
+    values, which only needed the Julian day.
+
+    enneagram_type / mbti_type are GIVEN (self-reported), never computed --
+    same distinction as birth data itself. Stored on the chart, not
+    passed separately to every later call, so a person states them once.
+    numerology_name is the same idea: the name to run through the
+    numerology cipher ring (tools/numerology.py) -- defaults to whatever
+    label the chart is stored under if not given a real name, matching
+    wealth_algorithm.py's own --numerology-name-falls-back-to---name CLI default."""
     birth_date: str
     birth_time: str
     latitude: float
@@ -299,6 +324,9 @@ class NatalChart:
     weights: Dict[str, int] = field(default_factory=dict)
     body_info: Dict[str, dict] = field(default_factory=dict)
     star_positions: Dict[str, float] = field(default_factory=dict)
+    enneagram_type: Optional[int] = None
+    mbti_type: Optional[str] = None
+    numerology_name: Optional[str] = None
     errors: List[str] = field(default_factory=list)
 
 
@@ -308,6 +336,9 @@ def get_natal_chart(
     latitude: float,
     longitude: float,
     sidereal: bool = True,
+    enneagram_type: Optional[int] = None,
+    mbti_type: Optional[str] = None,
+    numerology_name: Optional[str] = None,
 ) -> NatalChart:
     """
     Compute a natal chart. sidereal=True (Lahiri, 13-sign incl. Ophiuchus)
@@ -317,6 +348,10 @@ def get_natal_chart(
         birth_date: "YYYY-MM-DD"
         birth_time: "HH:MM:SS" (24hr, UT) -- matches your script's format
         latitude / longitude: birth location, decimal degrees
+        enneagram_type: GIVEN, not computed -- 1-9, or None if not stated
+        mbti_type: GIVEN, not computed -- 4-letter code, or None if not stated
+        numerology_name: GIVEN -- the name to run through the numerology
+            cipher ring, or None to skip that tier entirely
     """
     _ensure_ephemeris()
     y, m, d = (int(p) for p in birth_date.split("-"))
@@ -331,6 +366,9 @@ def get_natal_chart(
     for star in missing_stars:
         errors.append(f"Fixed star '{star}' not found in sefstars.txt -- skipped.")
 
+    if mbti_type is not None:
+        mbti_type = mbti_type.strip().upper()
+
     asc = calc_ascendant(jd, latitude, longitude, sidereal)
     day = is_day_chart(positions.get("Sun", 0.0), asc)
 
@@ -339,6 +377,8 @@ def get_natal_chart(
         latitude=latitude, longitude=longitude,
         julian_day=jd, sidereal=sidereal,
         ascendant=asc, is_day=day,
+        enneagram_type=enneagram_type, mbti_type=mbti_type,
+        numerology_name=numerology_name,
         positions=positions, weights=weights, body_info=body_info,
         star_positions=star_positions, errors=errors,
     )
@@ -356,6 +396,9 @@ def chart_to_dict(chart: NatalChart) -> dict:
         "zodiac": "13-sign sidereal (Lahiri, Ophiuchus incl.)" if chart.sidereal else "12-sign tropical",
         "ascendant": round(chart.ascendant, 4),
         "is_day_chart": chart.is_day,
+        "enneagram_type": chart.enneagram_type,
+        "mbti_type": chart.mbti_type,
+        "numerology_name": chart.numerology_name,
         "bodies": chart.body_info,
         "fixed_stars": {s: round(v, 6) for s, v in chart.star_positions.items()},
         "errors": chart.errors,
