@@ -113,7 +113,18 @@ def run_direct(
         "tree_of_life": tree_of_life(_date.fromisoformat(birth_date)),
     }
 
-    print(json.dumps({"chart": chart_dict, "score": boosted, "gates": gates, "mayan": mayan}, indent=2))
+    # Cosmic Playing Cards + Tarot: also purely a function of birth_date,
+    # also NOT wired into the score -- matches wealth_algorithm.py's own
+    # design exactly (computed and reported, never scored). Reuses
+    # agent_loop's handler directly so there's one implementation, not two.
+    from agent_loop import handle_get_cosmic_cards
+    cosmic_cards = handle_get_cosmic_cards(birth_date)
+
+    print(json.dumps(
+        {"chart": chart_dict, "score": boosted, "gates": gates,
+         "mayan": mayan, "cosmic_cards": cosmic_cards},
+        indent=2,
+    ))
 
 
 def main() -> None:
