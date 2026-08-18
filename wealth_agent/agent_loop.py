@@ -61,6 +61,18 @@ present. If numerology_name is given and ciphers.js isn't found, say so
 plainly and continue without that tier -- exactly what wealth_algorithm.py
 itself does, never silently substitute invented cipher values.
 
+COSMIC PLAYING CARDS + TAROT: get_cosmic_cards works from a date alone
+(birth_date or any other date), deriving the Earth card from the Cosmic
+Calendar and the other 14 "planetary" cards (Sun, Karma, Moon, Mercury...
+Phoenix) from tools/cardology.py's Master Spirit/Life spreads, plus their
+Tarot equivalents from tools/tarot.py. Deliberately NOT wired into
+score_wealth at all, in either direction (no multiplier tier, no additive
+term) -- this matches wealth_algorithm.py's own source exactly, which
+computes and reports these purely for display and says so explicitly in
+a comment. Don't invent a scoring mechanic for this even if asked "how
+much is my card worth" -- say plainly that these are descriptive, not
+scored, per the source design.
+
 Run from inside the wealth_agent/ directory: `python agent_loop.py`
 Requires: ANTHROPIC_API_KEY environment variable set to a real key.
 """
@@ -82,7 +94,7 @@ from tools.scoring import (
     score_wealth, score_result_to_dict,
     score_aspects, score_dignities, finalize_wealth_score,
 )
-from tools.calendar_bridge import cosmic_day_to_date, date_to_cosmic_day
+from tools.calendar_bridge import cosmic_day_to_date, date_to_cosmic_day, SUIT_SYMBOL
 from tools.gate_calendar_bridge import apply_all_cosmic_boosts
 from tools.gates import (
     handle_get_gate_for_longitude,
@@ -105,7 +117,13 @@ from tools.numerology import (
     ciphers_js_available,
     DEFAULT_CIPHERS_JS_PATH,
 )
+from tools import cardology
+from tools import tarot
 from cache import ChartCache
+
+_SUIT_SYMBOL_TO_LETTER: Dict[str, str] = {v: k[0].upper() for k, v in SUIT_SYMBOL.items()}
+# {'♠': 'S', '♦': 'D', '♣': 'C', '♥': 'H'}
+
 
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 2048
@@ -187,6 +205,15 @@ unavailable, say exactly that (missing cipher data file) rather than \
 producing a plausible-sounding profile from general numerology knowledge \
 -- this project's numerology tier is specifically the 15-cipher irrational- \
 constant ring from tools/numerology.py, not generic numerology.
+
+Cosmic Playing Cards + Tarot: get_cosmic_cards works from a date alone \
+(birth_date or any other date) -- Earth card plus 14 derived cards (Sun, \
+Karma, Moon, Mercury...Phoenix) with their Tarot equivalents. NEVER \
+folded into score_wealth, in either direction -- no multiplier, no \
+additive term. This matches your own wealth_algorithm.py exactly, which \
+computes and displays these purely for reading and says so in its own \
+comments. If asked "how much is my card worth" or similar, say plainly \
+these are descriptive, not scored -- don't improvise a scoring rule.
 
 The final normalized_score (0-100) comes with a rating label (Exceptional \
 / Strong / Moderate / Developing / Challenging) -- use it, don't invent \
@@ -443,10 +470,88 @@ TOOLS = [
             "required": ["name", "birth_date"],
         },
     },
+    {
+        "name": "get_cosmic_cards",
+        "description": (
+            "Full Cosmic Playing Card reading for a date -- Earth card plus "
+            "the 14 derived 'planetary' cards (Sun, Karma, Moon, Mercury... "
+            "Phoenix) from the Master Spirit/Life spreads, each with its "
+            "Tarot equivalent. Works from a date alone, no chart needed. "
+            "NOT scored -- purely descriptive, matching wealth_algorithm.py's "
+            "own design. Returns a plain note (not an error) if the date "
+            "falls on the cosmic Leap/Joker Day, which has no card profile."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD"},
+            },
+            "required": ["date"],
+        },
+    },
 ]
 
 _ALL_WEIGHTS: Dict[str, int] = {n: d["weight"] for n, d in PLANET_CATALOG.items()}
 _ALL_WEIGHTS.update(COMPUTED_WEIGHTS)
+
+
+def birth_card_str(greg_date: _date) -> Optional[str]:
+    """Earth (birth) card for a date, in cardology's compact notation
+    ('QH', '10C', ...). Ports wealth_algorithm.py's own birth_card_str()
+    exactly, using this project's date_to_cosmic_day() instead of a
+    standalone cosmic_calendar import. Returns None on the cosmic Leap/
+    Joker Day (Dec 18) -- that day sits outside the 52-card Master
+    Spreads, so no cardology profile exists for it, matching the source."""
+    info = date_to_cosmic_day(greg_date.isoformat())
+    if "error" in info or info.get("card") is None:
+        return None
+    suit_symbol, rank = info["card"]
+    suit = _SUIT_SYMBOL_TO_LETTER.get(suit_symbol)
+    if suit is None:  # the Joker
+        return None
+    return f"{rank}{suit}"
+
+
+def handle_get_cosmic_cards(date_str: str) -> Dict[str, Any]:
+    """Full Cosmic Card + Tarot reading for a date. NOT scored -- see
+    module docstring. Returns a clear note (not an error) on the cosmic
+    Leap/Joker Day, matching wealth_algorithm.py's own graceful skip."""
+    try:
+        d = _date.fromisoformat(date_str)
+    except ValueError as exc:
+        return {"error": f"Date parse error: {exc}"}
+
+    earth = birth_card_str(d)
+    if earth is None:
+        return {
+            "date": date_str,
+            "cosmic_cards": None,
+            "note": ("This date falls on the cosmic Leap Day (the Joker) -- "
+                     "no Master Spread position exists, so there's no cosmic "
+                     "card profile for it."),
+        }
+
+    cosmic_profile = cardology.derive_cosmic_cards(earth)
+    tarot_profile = tarot.derive_tarot_profile(cosmic_profile)
+
+    cards = {}
+    for field in cosmic_profile.__dataclass_fields__:
+        c = getattr(cosmic_profile, field)
+        t = getattr(tarot_profile, field)
+        cards[field] = {
+            "card": c.symbol,
+            "card_name": c.full_name,
+            "tarot_name": t.name,
+            "tarot_number": t.number,
+            "cosmic_number": tarot.cosmic_card_number(c),
+        }
+
+    return {
+        "date": date_str,
+        "earth_card": earth,
+        "cards": cards,
+        "note": "Descriptive only -- not folded into the wealth score, per the source design.",
+    }
 
 
 class SessionState:
@@ -692,6 +797,9 @@ class WealthAgent:
                     return numerology_profile_to_dict(profile)
                 except Exception as exc:
                     return {"error": f"{type(exc).__name__}: {exc}"}
+
+            elif tool_name == "get_cosmic_cards":
+                return handle_get_cosmic_cards(tool_input["date"])
 
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
