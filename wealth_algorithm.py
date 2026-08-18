@@ -16,7 +16,12 @@ Bodies tracked    : Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn,
 Fixed stars       : Taygeta, Arcturus, Sirius, Andromeda, Betelgeuse, Rigel,
                     Aldebaran, Fomalhaut, Antares, Regulus, Scheat, Sabik,
                     Rasalhague, Kaus Australis, Vega, Altair, Sadalsuud,
-                    Zuben Elgenubi
+                    Zuben Elgenubi, Castor, Pollux, Spica, Hamal, Acubens,
+                    Deneb Algedi, Ankaa, Deneb, Alrescha
+Deep-space points : Galactic Center (SgrA*), Super Galactic Center (M87),
+                    Solar Apex (LSR) — resolved via sefstars.txt like any
+                    other fixed star; see STAR_FALLBACKS for the catalog
+                    name each is actually stored under
 Sign modes        : Tropical 12-sign  (default)
                     Sidereal Lahiri 13-sign with Ophiuchus  (--sidereal)
 
@@ -44,6 +49,42 @@ try:
     import swisseph as swe
 except ImportError:
     sys.exit("[ERROR] pyswisseph not installed.  Run: pip install pyswisseph")
+
+try:
+    import Algorithm.wealth_agent.tools.numerology as numerology
+    _NUMEROLOGY_AVAILABLE = True
+except ImportError:
+    _NUMEROLOGY_AVAILABLE = False
+
+try:
+    import Algorithm.wealth_agent.tools.cardology as cardology
+    import cosmic_calendar
+    import Algorithm.wealth_agent.tools.tarot as tarot
+    _CARDOLOGY_AVAILABLE = True
+except ImportError:
+    _CARDOLOGY_AVAILABLE = False
+
+# cosmic_calendar hands back (suit_symbol, rank) e.g. ('♥', 'Q'); cardology
+# wants compact notation e.g. 'QH'. Ranks already match (both use '10',
+# 'J', 'Q', 'K', 'A'), so only the suit symbol needs translating.
+_SUIT_SYMBOL_TO_LETTER: Dict[str, str] = {'♠': 'S', '♥': 'H', '♦': 'D', '♣': 'C'}
+
+
+def birth_card_str(dt: datetime) -> Optional[str]:
+    """
+    Earth (birth) card for a date, in cardology's compact notation.
+    Returns None on the cosmic Leap Day, which lands on the Joker --
+    outside the 52-card Master Spreads, so no cardology profile exists
+    for that one day of the cosmic year.
+    """
+    info = cosmic_calendar.date_to_cosmic(dt.date())
+    if info is None:
+        return None
+    suit_symbol, rank = info["card"]
+    suit = _SUIT_SYMBOL_TO_LETTER.get(suit_symbol)
+    if suit is None:          # the Joker, on the Leap Day
+        return None
+    return f"{rank}{suit}"
 
 # ════════════════════════════════════════════════════════════════════════════
 #  METALLIC RATIO CONSTANTS
@@ -126,6 +167,19 @@ STAR_CATALOG: Dict[str, int] = {
     "Altair":         6,   # al Aql
     "Sadalsuud":      6,   # be Aqr
     "Zuben Elgenubi": 5,   # al-2 Lib
+    # ── added: requested stars + deep-space points ─────────────────────────
+    "Castor":               6,   # al Gem
+    "Pollux":               6,   # be Gem
+    "Spica":                9,   # al Vir — the wealth/abundance star (wheat sheaf); weighted with Sirius/Regulus
+    "Hamal":                5,   # al Ari
+    "Acubens":              3,   # al Cnc — faint (mag ~4.25), traditionally ill-favored
+    "Deneb Algedi":         5,   # de Cap
+    "Ankaa":                6,   # al Phe — the Phoenix: rebirth/transformation of fortune
+    "Deneb":                7,   # al Cyg — matches Vega/Altair, its Summer Triangle companions
+    "Alrescha":             4,   # al Psc
+    "Galactic Center":      8,   # SgrA* — direct sefstars.txt entry, no fallback needed
+    "Super Galactic Center":5,   # M87 in Virgo; niche compared to Galactic Center — see STAR_FALLBACKS
+    "Solar Apex":           5,   # LSR apex, ~RA 18h04m Dec+30 (Hercules) — see STAR_FALLBACKS
 }
 
 # Fallback names tried when the primary name fails in sefstars.txt
@@ -134,6 +188,10 @@ STAR_FALLBACKS: Dict[str, str] = {
     "Kaus Australis": "Kaus Austr",
     "Zuben Elgenubi": "Zuben Elge",
     "Taygeta":        "19Tau",
+    # sefstars.txt stores these two under different catalog names; both
+    # verified directly against the downloaded file before adding here.
+    "Solar Apex":            "Apex",        # file's own comment: "the solar apex, or the Apex of the Sun's Way"
+    "Super Galactic Center": "Messier 87",  # file's own comment credits this to astrologer Philip Sedgwick
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -244,7 +302,7 @@ def planet_dignity(planet: str, sign: str) -> str:
 #  FORMATTING HELPERS
 # ════════════════════════════════════════════════════════════════════════════
 def _dms(deg: float) -> str:
-    """Decimal degrees → D°MM'SS\" string."""
+    """Decimal degrees → D°MM'SS" string."""
     d = int(deg)
     rem = (deg - d) * 60
     m = int(rem)
@@ -401,7 +459,7 @@ def _fetch_star(name: str, jd: float, flags: int) -> Optional[float]:
 
 
 def calc_stars(jd: float) -> Dict[str, float]:
-    """Ecliptic longitudes for all 18 catalog fixed stars."""
+    """Ecliptic longitudes for all 30 catalog fixed stars/points."""
     flags = swe.FLG_SWIEPH
     out:  Dict[str, float] = {}
     for name in STAR_CATALOG:
@@ -588,6 +646,11 @@ def export_results(
     raw:         float,
     norm:        float,
     sidereal:    bool,
+    num_boost:   float = 0.0,
+    num_log:     Optional[List[dict]] = None,
+    num_profile: Optional["numerology.NumerologyProfile"] = None,
+    cosmic_cards: Optional["cardology.CosmicCardProfile"] = None,
+    tarot_cards: Optional["tarot.TarotCardProfile"] = None,
 ) -> None:
     ext = Path(outpath).suffix.lower()
 
@@ -604,6 +667,19 @@ def export_results(
             "fixed_stars": {s: {"lon": round(v, 4)} for s, v in star_pos.items()},
             "aspects":     aspect_log,
             "dignities":   dignity_log,
+            "numerology": ({
+                "name":              num_profile.name,
+                "life_path":         num_profile.life_path,
+                "life_path_planet":  num_profile.life_path_planet,
+                "ciphers":           num_log,
+                "boost":             round(num_boost, 3),
+            } if num_profile else None),
+            "cosmic_cards": (cosmic_cards.as_dict() if cosmic_cards else None),
+            "cosmic_card_numbers": ({
+                field: tarot.cosmic_card_number(getattr(cosmic_cards, field))
+                for field in cosmic_cards.__dataclass_fields__
+            } if cosmic_cards else None),
+            "tarot_cards": (tarot_cards.as_dict() if tarot_cards else None),
             "score": {
                 "raw":        round(raw, 3),
                 "normalized": round(norm, 1),
@@ -643,7 +719,13 @@ def print_report(
     dig_bonus:   float,
     sidereal:    bool,
     top_n:       int,
+    num_boost:   float = 0.0,
+    num_log:     Optional[List[dict]] = None,
+    num_profile: Optional["numerology.NumerologyProfile"] = None,
+    cosmic_cards: Optional["cardology.CosmicCardProfile"] = None,
+    tarot_cards: Optional["tarot.TarotCardProfile"] = None,
 ) -> None:
+    num_log = num_log or []
     W    = 82
     bar  = "─" * W
     dbar = "═" * W
@@ -658,8 +740,9 @@ def print_report(
     print(f"  Mode         : {mode}")
     print(f"{bar}")
 
-    # ── Body positions ────────────────────────────────────────────────────
     sign_hdr = "CONSTELLATION" if sidereal else "SIGN"
+
+    # ── Body positions ────────────────────────────────────────────────────
     print(f"\n  {'BODY':<22} {'LONGITUDE':>10}  {sign_hdr:<16}  {'IN SIGN':>7}  DIG  R")
     print(f"  {'─'*72}")
     for body, info in body_info.items():
@@ -716,11 +799,50 @@ def print_report(
         bar_sym = ("█" * min(bar_len, 34)) if asp_tot >= 0 else ("░" * min(bar_len, 34))
         print(f"  {asp_name:<18} {asp_tot:>+8.2f}  {bar_sym}")
 
+    # ── Numerology ────────────────────────────────────────────────────────
+    if num_log:
+        print(f"\n  NUMEROLOGY  ·  Life Path {num_profile.life_path}"
+              f" → {num_profile.life_path_planet}"
+              f"  ({num_profile.name})")
+        print(f"  {'─'*66}")
+        print(f"  {'CIPHER':<24} {'#':>4} {'M':>2}  {'PLANET':<10} {'SIGNAL':>8} {'CONTRIB':>9}")
+        for e in num_log:
+            m = "✦" if e["master"] else " "
+            print(f"  {e['cipher']:<24} {e['reduced']:>4} {m:>2}  "
+                  f"{e['planet']:<10} {e['signal']:>+8.2f} {e['contrib']:>+9.3f}")
+        print(f"  {'─'*66}")
+        print(f"  {'Numerology sub-total':<48}  {num_boost:>+7.2f}")
+        print(f"  (✦ = master number — amplified {numerology.MASTER_NUMBER_AMPLIFIER}× via MASTER_NUMBER_AMPLIFIER)")
+
+    # ── Cosmic playing cards + Tarot equivalents ─────────────────────────
+    if cosmic_cards:
+        cc, tc = cosmic_cards, tarot_cards
+        print(f"\n  COSMIC PLAYING CARDS  ·  Earth {cc.earth.symbol}  ({cc.earth.full_name})")
+        print(f"  {'─'*76}")
+        print(f"  {'POINT':<18} {'CARD':<6} {'TAROT EQUIVALENT':<20} {'#':>3}   COSMIC #")
+        print(f"  {'─'*76}")
+        rows = [("Sun (spirit card)", "sun"), ("Karma", "karma"), ("Moon", "moon")]
+        rows += [(label.capitalize(), label) for label in (
+            "mercury", "venus", "mars", "jupiter", "saturn", "uranus",
+            "neptune", "pluto", "chiron", "rahu", "midheaven", "phoenix")]
+        for label, field in rows:
+            c = getattr(cc, field)
+            t = getattr(tc, field) if tc else None
+            t_name = t.name if t else "—"
+            t_num  = str(t.number) if t and t.number is not None else "—"
+            print(f"  {label:<18} {c.symbol:<6} {t_name:<20} {t_num:>3}   "
+                  f"{tarot.cosmic_card_number(c) if tc else '—'}")
+        print(f"  {'─'*76}")
+        print(f"  (not folded into the wealth score — see cardology.py / tarot.py)")
+        print(f"  (# = teachmetarot.com index, 0–78  ·  COSMIC # = itsallinthecards.com index, 0–53)")
+
     # ── Final score ───────────────────────────────────────────────────────
     asp_total = sum(asp_totals.values())
     print(f"\n{dbar}")
     print(f"  ASPECT SCORE       :  {asp_total:>+10.2f}")
     print(f"  DIGNITY BONUS      :  {dig_bonus:>+10.2f}")
+    if num_log:
+        print(f"  NUMEROLOGY BOOST   :  {num_boost:>+10.2f}")
     print(f"  {'─'*32}")
     print(f"  RAW WEALTH SCORE   :  {raw:>+10.2f}")
     print(f"  NORMALIZED (0–100) :  {norm:>10.1f}")
@@ -764,6 +886,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Export results: path ending in .json or .csv")
     p.add_argument("--ephe-path", default=None, dest="ephe_path",
                    help="Custom ephemeris directory (default: ephe/ next to script)")
+    p.add_argument("--cipher-js", default=None, dest="cipher_js",
+                   help="Path to ciphers.js (default: next to this script)")
+    p.add_argument("--numerology-name", default=None, dest="numerology_name",
+                   help="Name to run through the numerology ring, if different"
+                        " from --name (e.g. full legal name)")
+    p.add_argument("--no-numerology", action="store_true", dest="no_numerology",
+                   help="Skip the numerology scoring tier entirely")
     return p
 
 
@@ -810,7 +939,47 @@ def main() -> None:
     print("  Scoring aspects and dignities …")
     asp_score,  aspect_log  = score_aspects(planet_pos, planet_wts, star_pos)
     dig_bonus,  dignity_log = score_dignities(planet_pos, planet_wts, body_info)
-    raw  = asp_score + dig_bonus
+
+    num_boost, num_log, num_profile = 0.0, [], None
+    if args.no_numerology:
+        pass
+    elif not _NUMEROLOGY_AVAILABLE:
+        print("  [!] Numerology: numerology.py not found alongside this script — skipped.")
+    else:
+        print("  Scoring numerology ring …")
+        cipher_js   = args.cipher_js or str(Path(__file__).parent / "ciphers.js")
+        numer_name  = args.numerology_name or name
+        try:
+            num_profile = numerology.compute_numerology_profile(
+                numer_name, (dt.year, dt.month, dt.day), cipher_js)
+            num_boost, num_log = numerology.score_numerology_boost(
+                num_profile, aspect_log, dignity_log)
+        except FileNotFoundError:
+            print(f"  [!] Numerology: cipher file not found at {cipher_js} — skipped.")
+        except Exception as exc:
+            print(f"  [!] Numerology: {exc} — skipped.")
+
+    cosmic_cards = None
+    if not _CARDOLOGY_AVAILABLE:
+        print("  [!] Cardology: cardology.py / cosmic_calendar.py not found alongside"
+              " this script — skipped.")
+    else:
+        print("  Deriving cosmic playing cards …")
+        earth = birth_card_str(dt)
+        if earth is None:
+            print("  [!] Cardology: birth date falls on the cosmic Leap Day (the"
+                  " Joker) — no Master Spread position exists, skipped.")
+        else:
+            cosmic_cards = cardology.derive_cosmic_cards(earth)
+
+    tarot_cards = tarot.derive_tarot_profile(cosmic_cards) if cosmic_cards else None
+
+    # Cardology/Tarot are reported alongside the chart, not folded into the
+    # score. If you want them to contribute, the natural spot is right
+    # here, added into `raw` before normalize() — the same
+    # additive-before-normalization pattern num_boost uses above — once
+    # you've defined what a given card/suit/arcana is actually worth.
+    raw  = asp_score + dig_bonus + num_boost
     norm = normalize(raw)
 
     print_report(
@@ -819,6 +988,8 @@ def main() -> None:
         aspect_log, dignity_log,
         raw, norm, dig_bonus,
         sidereal, top_n,
+        num_boost, num_log, num_profile,
+        cosmic_cards, tarot_cards,
     )
 
     if outpath:
@@ -827,6 +998,8 @@ def main() -> None:
             body_info, star_pos,
             aspect_log, dignity_log,
             raw, norm, sidereal,
+            num_boost, num_log, num_profile,
+            cosmic_cards, tarot_cards,
         )
 
 
