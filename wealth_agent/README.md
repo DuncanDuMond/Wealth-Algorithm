@@ -1,141 +1,88 @@
 # Wealth Algorithm Agent
 
-Wraps your `wealth_algorithm.py` + `cosmic_calendar.py` in an Anthropic API
-tool-calling loop, so the system can be driven conversationally ("what's my
-wealth score", "compare that to my partner's", "what card was I born
-under") instead of as separate single-shot CLI runs.
+Wraps `wealth_algorithm.py` + `cosmic_calendar.py` -- layered with a
+64-Gate Human Design system, an Enneagram + MBTI typology overlay, a
+Mayan Tzolkin calendar, a 15-cipher numerology ring, and now a Cosmic
+Playing Card + Tarot system -- in an Anthropic API tool-calling loop.
 
-## Fidelity: this is a port, not a reinterpretation
+## What's new: Cosmic Playing Cards + Tarot
 
-`tools/chart.py`, `tools/scoring.py`, and the core of `tools/calendar_bridge.py`
-are direct ports of your two uploaded scripts -- same constants, same
-formulas, same tables. This was checked, not assumed:
+`tools/cardology.py` and `tools/tarot.py`, copied in essentially
+unchanged -- both are self-contained (Card in, profile out) with no
+dependency on any other module in this project, so integration meant
+building the bridge *to* them, not editing them. A new `get_cosmic_cards`
+tool takes any date and returns the Earth card plus all 14 derived
+"planetary" cards (Sun, Karma, Moon, Mercury...Phoenix) from the Master
+Spirit/Life spreads, each with its Tarot equivalent.
 
-- **wealth_algorithm.py**: I ran your actual uploaded script (`--date
-  1994-03-21 --time 14:30:00 --lat 40.7128 --lon -74.0060 --sidereal`) and
-  compared against the ported version for the same input. Raw score, dignity
-  bonus, normalized score, rating, and individual aspect log entries
-  (orb-to-the-arcsecond, strength, contribution) all matched exactly.
-- **cosmic_calendar.py**: I ran your actual reverse lookup (`date_to_cosmic`)
-  against every single day across 2024-2027 (1,461 days, spanning leap
-  years, Joker Days, and Feb 29) and the forward lookup (`cosmic_day_to_date`
-  + `get_card`) across 5 cosmic years x 13 months x 28 days (1,820
-  combinations). Zero mismatches against your source in either direction.
+**Never touches the score, in either direction.** This is explicit in
+your own updated `wealth_algorithm.py` -- its `main()` computes
+`raw = asp_score + dig_bonus + num_boost` with no card term at all, and
+there's a comment in the source noting exactly where a scoring hook
+*would* go if you ever define what a card/suit/arcana is worth. Nothing
+here invents that definition. `get_cosmic_cards` is entirely separate
+from `score_wealth`, the same relationship Mayan astrology already has
+in this project.
 
-The one thing that's **not** a port: the wealth-score <-> calendar
-*integration* layer (month-ruler and suit-element boosts). That logic lives
-in a merged script you mentioned building previously but hasn't been
-uploaded here -- see "What's still scaffolding" below.
+## Verification, given both files came unusually well-documented already
 
-## Framework: true sidereal only
+Both uploaded files already carry their own confidence notes and a
+`_run_self_test()` -- more thorough self-documentation than most of what's
+been ported into this project so far. That's a reason to check carefully
+rather than a reason to check less: both self-tests were run and pass,
+and independent verification went further than what they check on their
+own:
 
-Your `wealth_algorithm.py` defaults to **tropical** and takes `--sidereal`
-to opt in. Per your standing instruction for this project, `get_natal_chart`
-is hardcoded to `sidereal=True` throughout the agent layer -- it's never
-exposed as a choice to the model. `tools/chart.py` still contains the
-tropical code path (it's in your source), but nothing in `agent_loop.py`
-or `main.py` can trigger it.
+- Swept all 52 possible Earth cards through `derive_cosmic_cards()` --
+  no errors, and confirmed the module's own 52-card-completeness
+  assertions (Life spread and Spirit spread each form a genuine, non-
+  duplicated deck) actually hold, not just that they're asserted.
+- The demo output happens to show Sun and Neptune landing on the same
+  card for one specific Earth card (Queen of Hearts) -- checked whether
+  that's a systematic bug by sweeping all 52 Earth cards and tabulating
+  every field-pair coincidence. It's ordinary chance, spread thinly
+  across many different field-pairs (no pair dominates), not a pattern.
+- Swept all 52 real playing cards through `tarot_equivalent()` /
+  `cosmic_card_number()` and confirmed the 1-52 cosmic numbering is a
+  clean bijection, with 0 and 53 correctly left unused by any real card
+  (reserved for the two Jokers).
+- Cross-validated the full chain -- date -> Earth card -> cosmic profile
+  -> Tarot profile -- against your actual uploaded `wealth_algorithm.py`
+  (using its real `birth_card_str()` and the `cosmic_calendar.py` from an
+  earlier upload) for the same test date used throughout this project.
+  Exact match on every field.
 
-## Setup
+**What independent verification can't resolve**: the module's own KARMA
+table is flagged (by its author, not by this pass) as the least-verified
+part of the source -- the smallest print on the chart, with only one
+independently-confirmed cell. That's a transcription-accuracy question
+against a source image this project doesn't have; no amount of internal
+consistency-checking closes that gap, so the caveat is carried forward
+as-is rather than either repeated without checking or quietly dropped.
 
-```powershell
-pip install -r requirements.txt --break-system-packages
-$env:ANTHROPIC_API_KEY = "your-key-here"    # current PowerShell session
-```
+## New bridge function: `birth_card_str()`
 
-`tools/chart.py` auto-downloads `ephe/sefstars.txt` (fixed-star data) on
-first use, exactly like your original `setup_ephemeris()`. Everything else
-(the 10 classical planets + True BML) runs on Swiss Ephemeris's built-in
-analytical fallback with no data files needed.
+wealth_algorithm.py's own version converts a `cosmic_calendar.date_to_cosmic()`
+result into cardology's compact notation ('QH', '10C', ...). This
+project's version in `agent_loop.py` does the same thing using
+`calendar_bridge.date_to_cosmic_day()` instead of a standalone
+`cosmic_calendar` import -- same suit-symbol translation table, same
+"returns None on the cosmic Leap/Joker Day" behavior, confirmed to
+produce identical output to the original for every date checked.
 
-## Running it
+## Tool list (14 total)
 
-```powershell
-# Test the astrology/scoring pipeline directly -- no API key, no API cost
-python main.py --direct 1994-03-21 14:30:00 40.7128 -74.0060
-
-# Full conversational agent
-python main.py
-```
-
-```
-you> What's the wealth score for someone born 1994-03-21 2:30pm UT in New York (40.7128, -74.0060)? Call them "self".
-agent> [computes chart + score, explains the result in plain language]
-
-you> What card was that person born under on the cosmic calendar?
-agent> [calls date_to_cosmic_day, answers using the already-known birth date]
-```
+| Tool               | Purpose                                                          |
+|--------------------|------------------------------------------------------------------|
+| `get_cosmic_cards` | Earth card + 14 derived cards + Tarot equivalents for any date   |
 
 ## Structure
 
-```
+```text
 wealth_agent/
   tools/
-    chart.py            # PORTED: positions, ascendant, Lots, Selena, stars
-    scoring.py           # PORTED: aspects, dignities, normalize, rating
-    calendar_bridge.py   # PORTED (dates/cards) + SCAFFOLDED (boosts)
-  agent_loop.py           # Anthropic API tool-use loop + WealthAgent class
-  cache.py                # pathlib-based local JSON cache for chart lookups
-  main.py                 # CLI: --direct mode or interactive agent
-  requirements.txt
+    cardology.py   # new: Master Spirit/Life spreads, copied in unchanged
+    tarot.py         # new: playing-card <-> Tarot mapping, one import path fix
+  agent_loop.py       # +1 tool, +birth_card_str() bridge, +1 system-prompt paragraph
+  main.py               # --direct output includes cosmic_cards automatically
 ```
-
-Run everything from inside this directory (`tools/` is a subpackage;
-`agent_loop.py`, `cache.py`, `main.py` are plain sibling modules).
-
-## What each tool does
-
-- **get_natal_chart** — sidereal chart: 11 tracked bodies (10 planets +
-  True Black Moon Lilith), 3 computed points (Lot of Fortune, Lot of
-  Spirit, White Moon Selena), 18 fixed stars, Placidus ascendant, day/night
-  status. Stores under a label; checks the local disk cache first.
-- **score_wealth** — reads a stored chart by label, runs your exact aspect
-  engine (14 aspect types incl. Golden/Silver/Bronze metallic-ratio angles,
-  Planet-Planet + Planet-Star with the 0.70 star factor) and dignity system
-  (Venus rules Virgo, Mercury rules Libra), normalizes to 0-100 with a
-  rating label, and **automatically** applies the Cosmic Calendar
-  month-ruler/suit-element boosts based on the chart's birth date.
-- **cosmic_day_to_date** / **date_to_cosmic_day** — forward/reverse
-  calendar lookups, usable standalone. Both take/return the *label* form of
-  the cosmic year (what you'd actually say -- "Cosmic Year 2026"), matching
-  your CLI's convention, even though your source's internal functions use
-  `cy` = label-1.
-- **recall_chart** / **list_recalled_charts** — session memory, so "now
-  compare that to Jan's chart" doesn't require re-sending birth data.
-
-## What's still scaffolding (not in either uploaded file)
-
-`tools/calendar_bridge.py`'s `COSMIC_MONTH_RULERS` and `SUIT_PLANET_GROUPS`
-power the two multiplicative boosts. Neither table exists in
-`wealth_algorithm.py` or `cosmic_calendar.py` -- you mentioned building this
-integration in a separate merged script previously, but that file hasn't
-been uploaded here. Current state:
-
-- **Boost values (1.15x month ruler, 1.10x suit element, stacking
-  multiplicatively)** — match what you described building before, so
-  these are probably right.
-- **COSMIC_MONTH_RULERS** — *derived*, not guessed: for each cosmic
-  month's Gregorian midpoint, I ran your actual `sign_sidereal_13()` with
-  the live ayanamsa and looked up that sign's ruler in your actual
-  `RULERSHIPS` table. Grounded in your two real scripts, just not
-  something you wrote directly. One quirk worth knowing: Month XIII
-  (Ophiuchus) can never trigger this boost, because Chiron -- Ophiuchus's
-  traditional ruler -- isn't a tracked/scored body in `wealth_algorithm.py`
-  at all (it only appears as a comment). I left it documented-but-inactive
-  rather than inventing a Chiron position your source doesn't compute.
-- **SUIT_PLANET_GROUPS** — genuinely invented. Common Tarot-suit/element
-  correspondence (Clubs/Wands=Fire, Diamonds/Pentacles=Earth,
-  Spades/Swords=Air, Hearts/Cups=Water) mapped to the classically
-  associated planets. Zero grounding in anything you've shared.
-
-If you have the actual merged integration script, upload it and I'll
-replace both tables with your real ones.
-
-## Two bugs from the previous scaffolded version, now moot
-
-The prior version of this project (before you uploaded the real scripts)
-had a gap in its sign-boundary table and a Dec-17 year-boundary bug in its
-own guessed calendar logic. Both were in code that's now fully replaced by
-your verified originals, so there's nothing to carry forward -- flagging
-only so the fix history isn't a mystery if you compare against earlier
-output.
