@@ -73,6 +73,22 @@ a comment. Don't invent a scoring mechanic for this even if asked "how
 much is my card worth" -- say plainly that these are descriptive, not
 scored, per the source design.
 
+ASTROCARTOGRAPHY: get_astrocartography_lines takes birth date/time only
+(no location -- that's the point: birth time is fixed, location is what
+the lines solve for) and returns MC/IC/AC/DC world-map lines for each of
+the 10 classical/modern planets. INDEPENDENT OF SIDEREAL/TROPICAL --
+these lines come from true equatorial position (right ascension/
+declination), real physical geometry that doesn't change based on which
+zodiac framework labels it, so don't describe this feature as sidereal or
+tropical either way. NOT wired into score_wealth (no source script exists
+for this feature to check that against, and no reason to assume one
+should be invented). AC/DC lines can have real gaps at latitudes where a
+body is circumpolar (never rises/sets there) -- report those as gaps, not
+as a missing/broken result. See tools/astrocartography.py's module
+docstring for how this was verified (an independent solver cross-check,
+not just internal consistency) and for a real topocentric-parallax bug
+the verification caught and fixed for the Moon specifically.
+
 Run from inside the wealth_agent/ directory: `python agent_loop.py`
 Requires: ANTHROPIC_API_KEY environment variable set to a real key.
 """
@@ -119,6 +135,7 @@ from tools.numerology import (
 )
 from tools import cardology
 from tools import tarot
+from tools.astrocartography import compute_lines, body_lines_to_dict, ACG_BODIES, DEFAULT_LAT_STEP
 from cache import ChartCache
 
 _SUIT_SYMBOL_TO_LETTER: Dict[str, str] = {v: k[0].upper() for k, v in SUIT_SYMBOL.items()}
@@ -214,6 +231,20 @@ additive term. This matches your own wealth_algorithm.py exactly, which \
 computes and displays these purely for reading and says so in its own \
 comments. If asked "how much is my card worth" or similar, say plainly \
 these are descriptive, not scored -- don't improvise a scoring rule.
+
+Astrocartography: get_astrocartography_lines takes birth date/time ONLY \
+-- no location, since location is what these lines solve for, not an \
+input to them. Independent of sidereal/tropical (true equatorial \
+position, real physical geometry -- don't frame this as either). AC/DC \
+curves can have genuine gaps at latitudes where a planet is circumpolar \
+there (never crosses the horizon) -- these are real astronomy, not \
+missing data; explain them as such if asked, don't paper over a gap by \
+interpolating across it. NOT scored, same relationship as Cosmic Cards \
+and Mayan astrology have to score_wealth. This is coordinate data (a \
+list of points per line) -- when explaining results, describe the \
+notable named places each line passes near rather than reciting raw \
+coordinates, since that's what actually makes an ACG reading useful \
+to a person.
 
 The final normalized_score (0-100) comes with a rating label (Exceptional \
 / Strong / Moderate / Developing / Challenging) -- use it, don't invent \
@@ -487,6 +518,35 @@ TOOLS = [
                 "date": {"type": "string", "description": "YYYY-MM-DD"},
             },
             "required": ["date"],
+        },
+    },
+    {
+        "name": "get_astrocartography_lines",
+        "description": (
+            "Astrocartography world-map lines (Jim Lewis AC*G system) for "
+            "a birth date/time -- NO location needed, that's what the lines "
+            "solve for. Returns, per planet, the MC/IC meridian longitudes "
+            "and AC/DC curves (rising/setting lines) as lists of "
+            "(longitude, latitude) points. AC/DC curves can have real gaps "
+            "at latitudes where the planet is circumpolar there (never "
+            "rises/sets) -- present those as gaps, not errors. NOT scored. "
+            "Independent of sidereal/tropical -- don't frame it either way."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "birth_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "birth_time": {"type": "string", "description": "HH:MM or HH:MM:SS, 24hr, in UT"},
+                "bodies": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional. Subset of planet names to compute (default: all 10).",
+                },
+                "lat_step": {
+                    "type": "number",
+                    "description": f"Optional. Degrees between AC/DC curve points (default {DEFAULT_LAT_STEP}). Smaller = smoother curve, larger payload.",
+                },
+            },
+            "required": ["birth_date", "birth_time"],
         },
     },
 ]
@@ -800,6 +860,24 @@ class WealthAgent:
 
             elif tool_name == "get_cosmic_cards":
                 return handle_get_cosmic_cards(tool_input["date"])
+
+            elif tool_name == "get_astrocartography_lines":
+                bodies = tool_input.get("bodies")
+                if bodies:
+                    invalid = [b for b in bodies if b not in ACG_BODIES]
+                    if invalid:
+                        return {"error": f"Unknown bodies: {invalid}. Valid: {sorted(ACG_BODIES)}"}
+                lat_step = tool_input.get("lat_step", DEFAULT_LAT_STEP)
+                lines = compute_lines(
+                    tool_input["birth_date"], tool_input["birth_time"],
+                    lat_step=lat_step, bodies=bodies,
+                )
+                return {
+                    "birth_date": tool_input["birth_date"],
+                    "birth_time": tool_input["birth_time"],
+                    "lines": {name: body_lines_to_dict(bl) for name, bl in lines.items()},
+                    "note": "Not scored -- descriptive only. Independent of sidereal/tropical.",
+                }
 
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
