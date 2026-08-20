@@ -27,6 +27,7 @@ from tools.gate_calendar_bridge import apply_all_cosmic_boosts
 from tools.human_design_gates import bodies_to_gates
 from tools.typology import bodies_to_archetype_wheel, apply_typology_boost, VALID_MBTI_CODES
 from tools.mayan_calendar import date_to_tzolkin, tree_of_life
+from tools.astrocartography import compute_lines, body_lines_to_dict
 from tools.numerology import (
     compute_numerology_profile, score_numerology_boost,
     ciphers_js_available, DEFAULT_CIPHERS_JS_PATH,
@@ -120,9 +121,18 @@ def run_direct(
     from agent_loop import handle_get_cosmic_cards
     cosmic_cards = handle_get_cosmic_cards(birth_date)
 
+    # Astrocartography: birth date/time only, no location (location is
+    # what these lines solve for). Also NOT wired into the score -- see
+    # agent_loop.py's module docstring. No source script exists for this
+    # feature; verified instead against an independent solver (pyswisseph's
+    # own rise_trans) -- see tools/astrocartography.py's module docstring.
+    acg_lines = compute_lines(birth_date, birth_time)
+    astrocartography = {name: body_lines_to_dict(bl) for name, bl in acg_lines.items()}
+
     print(json.dumps(
         {"chart": chart_dict, "score": boosted, "gates": gates,
-         "mayan": mayan, "cosmic_cards": cosmic_cards},
+         "mayan": mayan, "cosmic_cards": cosmic_cards,
+         "astrocartography": astrocartography},
         indent=2,
     ))
 
