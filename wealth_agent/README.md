@@ -2,87 +2,108 @@
 
 Wraps `wealth_algorithm.py` + `cosmic_calendar.py` -- layered with a
 64-Gate Human Design system, an Enneagram + MBTI typology overlay, a
-Mayan Tzolkin calendar, a 15-cipher numerology ring, and now a Cosmic
-Playing Card + Tarot system -- in an Anthropic API tool-calling loop.
+Mayan Tzolkin calendar, a 15-cipher numerology ring, a Cosmic Playing
+Card + Tarot system, and now astrocartography -- in an Anthropic API
+tool-calling loop.
 
-## What's new: Cosmic Playing Cards + Tarot
+## What's new: astrocartography
 
-`tools/cardology.py` and `tools/tarot.py`, copied in essentially
-unchanged -- both are self-contained (Card in, profile out) with no
-dependency on any other module in this project, so integration meant
-building the bridge *to* them, not editing them. A new `get_cosmic_cards`
-tool takes any date and returns the Earth card plus all 14 derived
-"planetary" cards (Sun, Karma, Moon, Mercury...Phoenix) from the Master
-Spirit/Life spreads, each with its Tarot equivalent.
+`tools/astrocartography.py` implements the Jim Lewis AstroCartoGraphy
+system directly -- MC/IC (meridian) and AC/DC (curved rising/setting)
+world-map lines for each of the 10 classical/modern planets, from a
+birth date/time alone. A new `get_astrocartography_lines` tool takes no
+location at all -- that's the point of ACG: birth time is fixed, and the
+lines are what solve for location.
 
-**Never touches the score, in either direction.** This is explicit in
-your own updated `wealth_algorithm.py` -- its `main()` computes
-`raw = asp_score + dig_bonus + num_boost` with no card term at all, and
-there's a comment in the source noting exactly where a scoring hook
-*would* go if you ever define what a card/suit/arcana is worth. Nothing
-here invents that definition. `get_cosmic_cards` is entirely separate
-from `score_wealth`, the same relationship Mayan astrology already has
-in this project.
+**This one has no source script.** Every other module in this project
+started as an uploaded file to port and verify against. This one is a
+direct implementation of standard celestial-mechanics formulas -- the
+same ones Jim Lewis's original system runs on, still used by every
+modern ACG tool including astro.com's World Map -- which meant
+verification had to work differently: instead of diffing against a
+source file, every line this module produces was checked against
+pyswisseph's own independent rise/set/transit solver (`swe.rise_trans`),
+a completely separate code path from the trigonometry this module
+implements.
 
-## Verification, given both files came unusually well-documented already
+## Independent of sidereal/tropical
 
-Both uploaded files already carry their own confidence notes and a
-`_run_self_test()` -- more thorough self-documentation than most of what's
-been ported into this project so far. That's a reason to check carefully
-rather than a reason to check less: both self-tests were run and pass,
-and independent verification went further than what they check on their
-own:
+Worth calling out since it's a real departure from every other module
+here: ACG lines come from a planet's true equatorial position (right
+ascension + declination) at the birth instant -- physical geometry.
+Sidereal vs. tropical only changes which zodiac sign a longitude gets
+labeled with; it doesn't move the planet. The lines would come out
+identical either way, so this module doesn't have a sidereal setting,
+and `agent_loop.py`'s guidance is explicit that the model shouldn't
+frame this feature as either one.
 
-- Swept all 52 possible Earth cards through `derive_cosmic_cards()` --
-  no errors, and confirmed the module's own 52-card-completeness
-  assertions (Life spread and Spirit spread each form a genuine, non-
-  duplicated deck) actually hold, not just that they're asserted.
-- The demo output happens to show Sun and Neptune landing on the same
-  card for one specific Earth card (Queen of Hearts) -- checked whether
-  that's a systematic bug by sweeping all 52 Earth cards and tabulating
-  every field-pair coincidence. It's ordinary chance, spread thinly
-  across many different field-pairs (no pair dominates), not a pattern.
-- Swept all 52 real playing cards through `tarot_equivalent()` /
-  `cosmic_card_number()` and confirmed the 1-52 cosmic numbering is a
-  clean bijection, with 0 and 53 correctly left unused by any real card
-  (reserved for the two Jokers).
-- Cross-validated the full chain -- date -> Earth card -> cosmic profile
-  -> Tarot profile -- against your actual uploaded `wealth_algorithm.py`
-  (using its real `birth_card_str()` and the `cosmic_calendar.py` from an
-  earlier upload) for the same test date used throughout this project.
-  Exact match on every field.
+## Verification, and a real bug it caught
 
-**What independent verification can't resolve**: the module's own KARMA
-table is flagged (by its author, not by this pass) as the least-verified
-part of the source -- the smallest print on the chart, with only one
-independently-confirmed cell. That's a transcription-accuracy question
-against a source image this project doesn't have; no amount of internal
-consistency-checking closes that gap, so the caveat is carried forward
-as-is rather than either repeated without checking or quietly dropped.
+Checked against `swe.rise_trans` for a real chart (your birth data --
+confirmed against the astro.com World Map export you provided) across
+all 10 bodies, all four line types, latitudes -89 to 89: 302+ points
+checked, max discrepancy 0.03-0.15 seconds -- floating-point noise.
+Circumpolar-gap detection (where a planet never crosses the horizon at a
+given latitude, so the AC/DC curve has a real break) was checked the
+same way: `rise_trans`'s own "event not found" code compared against
+this module's gap ranges at 20 gap-midpoint latitudes, zero mismatches.
 
-## New bridge function: `birth_card_str()`
+**The verification caught a real bug, not just confirmed correctness.**
+The first version used geocentric coordinates throughout and matched
+`rise_trans` almost exactly for every body -- except the Moon, where
+AC/DC points were off by up to 3,537 seconds (nearly an hour, close to
+15 degrees of longitude at Earth's rotation rate). Cause: the Moon is
+close enough to Earth that its true position depends measurably on
+*where on Earth's surface* you're standing -- topocentric parallax
+reaches about 1 degree for the Moon, vs. arcseconds (negligible) for the
+Sun and planets. AC/DC curves solve for exactly that surface location,
+so geocentric coordinates were the wrong input specifically for the
+Moon. Fixed with a short fixed-point iteration -- estimate a point
+geocentrically, recompute the body's position as seen from that
+candidate point, refine, repeat (converges in 1-2 steps) -- applied to
+every body uniformly rather than special-cased to the Moon, since the
+iteration costs nothing extra where parallax is already negligible.
 
-wealth_algorithm.py's own version converts a `cosmic_calendar.date_to_cosmic()`
-result into cardology's compact notation ('QH', '10C', ...). This
-project's version in `agent_loop.py` does the same thing using
-`calendar_bridge.date_to_cosmic_day()` instead of a standalone
-`cosmic_calendar` import -- same suit-symbol translation table, same
-"returns None on the cosmic Leap/Joker Day" behavior, confirmed to
-produce identical output to the original for every date checked.
+Separately, spot-checked qualitatively against your astro.com export for
+the same birth data (not pixel-precisely -- reading exact coordinates off
+a static image isn't reliable): same dense line-convergence cluster over
+central-northern Asia in both, same western vertical-line grouping, same
+overall curve shapes.
 
-## Tool list (14 total)
+## Not scored, same as Mayan and Cosmic Cards
 
-| Tool               | Purpose                                                          |
-|--------------------|------------------------------------------------------------------|
-| `get_cosmic_cards` | Earth card + 14 derived cards + Tarot equivalents for any date   |
+No source script exists to check a scoring hook against, and there's no
+reason to assume one should be invented. `get_astrocartography_lines` is
+completely separate from `score_wealth`.
+
+## Circumpolar gaps are real astronomy, not missing data
+
+At some latitudes, a given planet never crosses the horizon at all
+(circumpolar). The AC/DC curve genuinely breaks there -- `ac_circumpolar_gaps`
+/ `dc_circumpolar_gaps` report those ranges explicitly rather than
+silently interpolating a false continuous line through them.
+
+## Tool list (15 total)
+
+| Tool | Purpose |
+| --- | --- |
+| `get_astrocartography_lines` | MC/IC/AC/DC lines for all (or a subset of) planets, from birth date/time alone |
 
 ## Structure
 
 ```text
 wealth_agent/
   tools/
-    cardology.py   # new: Master Spirit/Life spreads, copied in unchanged
-    tarot.py         # new: playing-card <-> Tarot mapping, one import path fix
-  agent_loop.py       # +1 tool, +birth_card_str() bridge, +1 system-prompt paragraph
-  main.py               # --direct output includes cosmic_cards automatically
+    astrocartography.py   # new: Jim Lewis ACG lines, no source script -- verified via independent solver
+  agent_loop.py             # +1 tool, +1 system-prompt paragraph
+  main.py                     # --direct output includes astrocartography automatically
 ```
+
+## Not built yet: map rendering
+
+`get_astrocartography_lines` returns structured coordinate data (lists of
+(longitude, latitude) points per line) -- deliberately, since this is a
+backend Python tool, not a place to embed a mapping library. A world-map
+visualization (matching what astro.com's own export shows) is a
+reasonable next step if wanted, but is a separate scope decision from the
+line-generation engine itself.
