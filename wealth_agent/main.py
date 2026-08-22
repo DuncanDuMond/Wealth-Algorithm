@@ -28,6 +28,7 @@ from tools.human_design_gates import bodies_to_gates
 from tools.typology import bodies_to_archetype_wheel, apply_typology_boost, VALID_MBTI_CODES
 from tools.mayan_calendar import date_to_tzolkin, tree_of_life
 from tools.astrocartography import compute_lines, body_lines_to_dict
+from tools.astrocartography_map import render_map
 from tools.numerology import (
     compute_numerology_profile, score_numerology_boost,
     ciphers_js_available, DEFAULT_CIPHERS_JS_PATH,
@@ -38,7 +39,7 @@ from cache import ChartCache
 def run_direct(
     birth_date: str, birth_time: str, lat: float, lon: float,
     enneagram_type: int | None = None, mbti_type: str | None = None,
-    numerology_name: str | None = None,
+    numerology_name: str | None = None, render_map_path: str | None = None,
 ) -> None:
     cache = ChartCache()
     cached = cache.get(birth_date, birth_time, lat, lon)
@@ -129,12 +130,20 @@ def run_direct(
     acg_lines = compute_lines(birth_date, birth_time)
     astrocartography = {name: body_lines_to_dict(bl) for name, bl in acg_lines.items()}
 
-    print(json.dumps(
-        {"chart": chart_dict, "score": boosted, "gates": gates,
-         "mayan": mayan, "cosmic_cards": cosmic_cards,
-         "astrocartography": astrocartography},
-        indent=2,
-    ))
+    map_path = None
+    if render_map_path:
+        map_path = render_map(
+            acg_lines, render_map_path,
+            title=f"Astrocartography -- {birth_date} {birth_time} UT",
+        )
+        print(f"Map saved to {map_path}", file=sys.stderr)
+
+    output = {"chart": chart_dict, "score": boosted, "gates": gates,
+              "mayan": mayan, "cosmic_cards": cosmic_cards,
+              "astrocartography": astrocartography}
+    if map_path:
+        output["astrocartography_map_path"] = map_path
+    print(json.dumps(output, indent=2))
 
 
 def main() -> None:
@@ -151,6 +160,9 @@ def main() -> None:
                          help="Optional name to run through the numerology cipher ring, "
                               "only used with --direct. Requires ciphers.js to be present "
                               "(see tools/numerology.py) -- skipped with a warning otherwise.")
+    parser.add_argument("--render-map", type=str, metavar="PATH",
+                         help="Optional. Save an astrocartography map image (.png or .svg) "
+                              "to this path, only used with --direct.")
     args = parser.parse_args()
 
     if args.direct:
@@ -159,7 +171,7 @@ def main() -> None:
         birth_date, birth_time, lat, lon = args.direct
         run_direct(birth_date, birth_time, float(lat), float(lon),
                    enneagram_type=args.enneagram, mbti_type=args.mbti,
-                   numerology_name=args.numerology_name)
+                   numerology_name=args.numerology_name, render_map_path=args.render_map)
     else:
         from agent_loop import WealthAgent
         import os
