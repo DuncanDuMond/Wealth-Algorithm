@@ -89,6 +89,14 @@ docstring for how this was verified (an independent solver cross-check,
 not just internal consistency) and for a real topocentric-parallax bug
 the verification caught and fixed for the Moon specifically.
 
+render_astrocartography_map writes an actual world-map image (PNG/SVG) to
+disk and returns its path -- a static image, not an interactive HTML map,
+by deliberate choice (see tools/astrocartography_map.py's module
+docstring: this project has no way to render/screenshot an HTML+JS map to
+confirm it looks right before shipping it, but a static image could be,
+and was, actually rendered and checked). Tell the person the file path so
+they can open it -- this tool doesn't display the image itself.
+
 Run from inside the wealth_agent/ directory: `python agent_loop.py`
 Requires: ANTHROPIC_API_KEY environment variable set to a real key.
 """
@@ -136,6 +144,7 @@ from tools.numerology import (
 from tools import cardology
 from tools import tarot
 from tools.astrocartography import compute_lines, body_lines_to_dict, ACG_BODIES, DEFAULT_LAT_STEP
+from tools.astrocartography_map import render_map
 from cache import ChartCache
 
 _SUIT_SYMBOL_TO_LETTER: Dict[str, str] = {v: k[0].upper() for k, v in SUIT_SYMBOL.items()}
@@ -244,7 +253,10 @@ and Mayan astrology have to score_wealth. This is coordinate data (a \
 list of points per line) -- when explaining results, describe the \
 notable named places each line passes near rather than reciting raw \
 coordinates, since that's what actually makes an ACG reading useful \
-to a person.
+to a person. When a person wants to SEE their lines rather than just \
+hear about them, use render_astrocartography_map -- it writes an image \
+file and returns the path; tell them where to find it, since you can't \
+display the image yourself.
 
 The final normalized_score (0-100) comes with a rating label (Exceptional \
 / Strong / Moderate / Developing / Challenging) -- use it, don't invent \
@@ -545,6 +557,33 @@ TOOLS = [
                     "type": "number",
                     "description": f"Optional. Degrees between AC/DC curve points (default {DEFAULT_LAT_STEP}). Smaller = smoother curve, larger payload.",
                 },
+            },
+            "required": ["birth_date", "birth_time"],
+        },
+    },
+    {
+        "name": "render_astrocartography_map",
+        "description": (
+            "Render astrocartography lines onto an actual world map image "
+            "(PNG or SVG) and save it to disk. Returns the file path -- "
+            "this tool does not display the image itself, so tell the "
+            "person where it was saved. A static image, not an interactive "
+            "map (see system prompt for why)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "birth_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "birth_time": {"type": "string", "description": "HH:MM or HH:MM:SS, 24hr, in UT"},
+                "output_path": {
+                    "type": "string",
+                    "description": "Optional. Where to save the image (.png or .svg). Defaults to output/astrocartography_<birth_date>.png",
+                },
+                "bodies": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional. Subset of planet names to draw (default: all 10).",
+                },
+                "title": {"type": "string", "description": "Optional. Map title text."},
             },
             "required": ["birth_date", "birth_time"],
         },
@@ -877,6 +916,25 @@ class WealthAgent:
                     "birth_time": tool_input["birth_time"],
                     "lines": {name: body_lines_to_dict(bl) for name, bl in lines.items()},
                     "note": "Not scored -- descriptive only. Independent of sidereal/tropical.",
+                }
+
+            elif tool_name == "render_astrocartography_map":
+                bodies = tool_input.get("bodies")
+                if bodies:
+                    invalid = [b for b in bodies if b not in ACG_BODIES]
+                    if invalid:
+                        return {"error": f"Unknown bodies: {invalid}. Valid: {sorted(ACG_BODIES)}"}
+                bd = tool_input["birth_date"]
+                lines = compute_lines(bd, tool_input["birth_time"], bodies=bodies)
+                output_path = tool_input.get("output_path") or f"output/astrocartography_{bd}.png"
+                path = render_map(
+                    lines, output_path,
+                    title=tool_input.get("title"), bodies=bodies,
+                )
+                return {
+                    "path": path,
+                    "bodies_drawn": bodies if bodies else list(lines.keys()),
+                    "note": "Static image -- open it directly to view. Not scored.",
                 }
 
             else:
