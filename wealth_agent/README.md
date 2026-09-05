@@ -47,22 +47,17 @@ arbitrary CDNs.
 
 ## What was actually checked, not just coded
 
-- **Loads without error**: opened the real generated file in the headless
   browser and captured console/page errors -- none.
-- **Toggling actually works, not just exists**: used the browser to click
   8 of 10 planet checkboxes off, re-screenshotted, and confirmed only the
   2 remaining planets' lines were still visible. This is the feature that
   justifies building an interactive version at all (40 overlapping lines
   don't declutter with a fixed legend), so it's the one most worth having
   actually clicked rather than assumed.
-- **Tooltips actually work**: hovered a real line element in the browser
   and confirmed a tooltip appeared with the correct label ("Mercury DC").
-- **The full agent dispatch path, not just my standalone test script**:
   generated a map by calling the tool through `WealthAgent._dispatch()`
   the same way the real agent loop would, then rendered and screenshotted
   *that* file specifically -- confirming the tool wiring itself produces
   a working file, not just the underlying render function in isolation.
-- **Web Mercator's known pole distortion**: AC/DC curves reach +-89
   degrees latitude; Web Mercator (which this map uses, like every
   standard web map) is unusable much past ~85 degrees. Checked by
   rendering rather than assumed away -- the map handles it the same way
@@ -72,7 +67,7 @@ arbitrary CDNs.
 ## Tool list (17 total)
 
 | Tool | Purpose |
-|---|---|
+| --- | --- |
 | `render_interactive_astrocartography_map` | Saves a self-contained interactive HTML map; returns the file path |
 
 `render_astrocartography_map` (static PNG/SVG) and `get_astrocartography_lines`
@@ -80,7 +75,7 @@ arbitrary CDNs.
 
 ## Structure
 
-```
+```text
 wealth_agent/
   tools/
     astrocartography_interactive.py   # new: Leaflet-based interactive HTML renderer
@@ -90,4 +85,5 @@ wealth_agent/
     leaflet/                                # new: self-hosted Leaflet 1.9.4 (JS, CSS, marker images)
   agent_loop.py                             # +1 tool, extended system-prompt guidance
   main.py                                     # --render-map now picks the renderer by file extension
+
 ```
