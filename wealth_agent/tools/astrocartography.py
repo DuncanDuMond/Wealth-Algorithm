@@ -257,6 +257,27 @@ def compute_lines(
     return result
 
 
+def split_on_wraparound(points: List[Tuple[float, float]]) -> List[List[Tuple[float, float]]]:
+    """An AC/DC curve is generated latitude-by-latitude; where it crosses
+    the +-180deg seam, consecutive longitude values jump by ~360deg. A
+    naive plot (or map polyline) would draw a spurious line straight
+    across the map at that point -- split into separate segments there
+    instead. Shared by every renderer (static image, interactive map) --
+    pure coordinate geometry, no rendering-library dependency, so it
+    lives here rather than in any one renderer."""
+    if not points:
+        return []
+    segments, current = [], [points[0]]
+    for prev, curr in zip(points, points[1:]):
+        if abs(curr[0] - prev[0]) > 180:
+            segments.append(current)
+            current = [curr]
+        else:
+            current.append(curr)
+    segments.append(current)
+    return segments
+
+
 def body_lines_to_dict(bl: BodyLines) -> dict:
     return {
         "body": bl.body,
