@@ -29,6 +29,7 @@ from tools.typology import bodies_to_archetype_wheel, apply_typology_boost, VALI
 from tools.mayan_calendar import date_to_tzolkin, tree_of_life
 from tools.astrocartography import compute_lines, body_lines_to_dict
 from tools.astrocartography_map import render_map
+from tools.astrocartography_interactive import render_interactive_map
 from tools.numerology import (
     compute_numerology_profile, score_numerology_boost,
     ciphers_js_available, DEFAULT_CIPHERS_JS_PATH,
@@ -132,10 +133,19 @@ def run_direct(
 
     map_path = None
     if render_map_path:
-        map_path = render_map(
-            acg_lines, render_map_path,
-            title=f"Astrocartography -- {birth_date} {birth_time} UT",
-        )
+        # .html -> interactive (pan/zoom, toggle planets, tooltips);
+        # anything else (.png/.svg) -> static image. One flag, extension
+        # picks the renderer, rather than a second flag to choose between them.
+        if render_map_path.lower().endswith(".html"):
+            map_path = render_interactive_map(
+                acg_lines, render_map_path,
+                title=f"Astrocartography -- {birth_date} {birth_time} UT",
+            )
+        else:
+            map_path = render_map(
+                acg_lines, render_map_path,
+                title=f"Astrocartography -- {birth_date} {birth_time} UT",
+            )
         print(f"Map saved to {map_path}", file=sys.stderr)
 
     output = {"chart": chart_dict, "score": boosted, "gates": gates,
@@ -161,8 +171,9 @@ def main() -> None:
                               "only used with --direct. Requires ciphers.js to be present "
                               "(see tools/numerology.py) -- skipped with a warning otherwise.")
     parser.add_argument("--render-map", type=str, metavar="PATH",
-                         help="Optional. Save an astrocartography map image (.png or .svg) "
-                              "to this path, only used with --direct.")
+                         help="Optional. Save an astrocartography map to this path, only "
+                              "used with --direct. .html -> interactive (pan/zoom, toggle "
+                              "planets, tooltips); .png/.svg -> static image.")
     args = parser.parse_args()
 
     if args.direct:
