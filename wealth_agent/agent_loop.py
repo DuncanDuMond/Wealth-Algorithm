@@ -89,13 +89,20 @@ docstring for how this was verified (an independent solver cross-check,
 not just internal consistency) and for a real topocentric-parallax bug
 the verification caught and fixed for the Moon specifically.
 
-render_astrocartography_map writes an actual world-map image (PNG/SVG) to
-disk and returns its path -- a static image, not an interactive HTML map,
-by deliberate choice (see tools/astrocartography_map.py's module
-docstring: this project has no way to render/screenshot an HTML+JS map to
-confirm it looks right before shipping it, but a static image could be,
-and was, actually rendered and checked). Tell the person the file path so
-they can open it -- this tool doesn't display the image itself.
+render_astrocartography_map writes a static world-map image (PNG/SVG) to
+disk and returns its path. render_interactive_astrocartography_map writes
+a single self-contained HTML file (pan/zoom, per-planet show/hide via a
+layer control, hover tooltips) -- this WAS the "no way to verify an
+HTML+JS map before shipping it" limitation noted in an earlier version of
+this project, resolved by getting a headless browser working in the
+sandbox this was built in (Playwright's Chromium) specifically so every
+generated map could be, and was, actually opened, rendered, and
+screenshotted -- including clicking the layer-control checkboxes and
+confirming lines actually appear/disappear, not just that the page loads
+without a JS error. See tools/astrocartography_interactive.py's module
+docstring for what that verification covered. Both map tools only return
+a file path -- tell the person where to find it, since neither tool
+displays the image/page itself.
 
 Run from inside the wealth_agent/ directory: `python agent_loop.py`
 Requires: ANTHROPIC_API_KEY environment variable set to a real key.
@@ -145,6 +152,7 @@ from tools import cardology
 from tools import tarot
 from tools.astrocartography import compute_lines, body_lines_to_dict, ACG_BODIES, DEFAULT_LAT_STEP
 from tools.astrocartography_map import render_map
+from tools.astrocartography_interactive import render_interactive_map
 from cache import ChartCache
 
 _SUIT_SYMBOL_TO_LETTER: Dict[str, str] = {v: k[0].upper() for k, v in SUIT_SYMBOL.items()}
@@ -254,9 +262,13 @@ list of points per line) -- when explaining results, describe the \
 notable named places each line passes near rather than reciting raw \
 coordinates, since that's what actually makes an ACG reading useful \
 to a person. When a person wants to SEE their lines rather than just \
-hear about them, use render_astrocartography_map -- it writes an image \
-file and returns the path; tell them where to find it, since you can't \
-display the image yourself.
+hear about them, use render_interactive_astrocartography_map by default \
+(pan/zoom, toggle individual planets, hover tooltips -- genuinely more \
+usable than a fixed image once more than 2-3 planets are shown at once); \
+use render_astrocartography_map (static PNG/SVG) instead only if they \
+specifically want a plain image file, e.g. to paste elsewhere. Both only \
+return a file path -- tell them where to find it and to open it in a \
+browser, since you can't display it yourself.
 
 The final normalized_score (0-100) comes with a rating label (Exceptional \
 / Strong / Moderate / Developing / Challenging) -- use it, don't invent \
@@ -564,11 +576,10 @@ TOOLS = [
     {
         "name": "render_astrocartography_map",
         "description": (
-            "Render astrocartography lines onto an actual world map image "
+            "Render astrocartography lines onto a static world map image "
             "(PNG or SVG) and save it to disk. Returns the file path -- "
             "this tool does not display the image itself, so tell the "
-            "person where it was saved. A static image, not an interactive "
-            "map (see system prompt for why)."
+            "person where it was saved."
         ),
         "input_schema": {
             "type": "object",
@@ -578,6 +589,36 @@ TOOLS = [
                 "output_path": {
                     "type": "string",
                     "description": "Optional. Where to save the image (.png or .svg). Defaults to output/astrocartography_<birth_date>.png",
+                },
+                "bodies": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional. Subset of planet names to draw (default: all 10).",
+                },
+                "title": {"type": "string", "description": "Optional. Map title text."},
+            },
+            "required": ["birth_date", "birth_time"],
+        },
+    },
+    {
+        "name": "render_interactive_astrocartography_map",
+        "description": (
+            "Render astrocartography lines as a single self-contained "
+            "interactive HTML file -- pan/zoom, a layer-control panel to "
+            "show/hide individual planets, and hover tooltips naming each "
+            "line. Opens directly in a browser (file://, no server, no "
+            "internet needed to view). Prefer this over "
+            "render_astrocartography_map when the person wants to explore "
+            "the map rather than just see a fixed snapshot. Returns the "
+            "file path -- tell the person to open it in a browser."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "birth_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "birth_time": {"type": "string", "description": "HH:MM or HH:MM:SS, 24hr, in UT"},
+                "output_path": {
+                    "type": "string",
+                    "description": "Optional. Where to save the .html file. Defaults to output/astrocartography_<birth_date>.html",
                 },
                 "bodies": {
                     "type": "array", "items": {"type": "string"},
@@ -935,6 +976,26 @@ class WealthAgent:
                     "path": path,
                     "bodies_drawn": bodies if bodies else list(lines.keys()),
                     "note": "Static image -- open it directly to view. Not scored.",
+                }
+
+            elif tool_name == "render_interactive_astrocartography_map":
+                bodies = tool_input.get("bodies")
+                if bodies:
+                    invalid = [b for b in bodies if b not in ACG_BODIES]
+                    if invalid:
+                        return {"error": f"Unknown bodies: {invalid}. Valid: {sorted(ACG_BODIES)}"}
+                bd = tool_input["birth_date"]
+                lines = compute_lines(bd, tool_input["birth_time"], bodies=bodies)
+                output_path = tool_input.get("output_path") or f"output/astrocartography_{bd}.html"
+                path = render_interactive_map(
+                    lines, output_path,
+                    title=tool_input.get("title"), bodies=bodies,
+                )
+                return {
+                    "path": path,
+                    "bodies_drawn": bodies if bodies else list(lines.keys()),
+                    "note": ("Self-contained interactive HTML -- open in any browser, no "
+                             "internet needed. Not scored."),
                 }
 
             else:
