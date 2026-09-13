@@ -25,7 +25,7 @@ from tools.scoring import (
 )
 from tools.gate_calendar_bridge import apply_all_cosmic_boosts
 from tools.human_design_gates import bodies_to_gates
-from tools.typology import bodies_to_archetype_wheel, apply_typology_boost, VALID_MBTI_CODES
+from tools.typology import bodies_to_archetype_wheel, apply_typology_boost, parse_enneagram_input, parse_mbti_input
 from tools.mayan_calendar import date_to_tzolkin, tree_of_life
 from tools.astrocartography import compute_lines, body_lines_to_dict
 from tools.astrocartography_map import render_map
@@ -39,9 +39,15 @@ from cache import ChartCache
 
 def run_direct(
     birth_date: str, birth_time: str, lat: float, lon: float,
-    enneagram_type: int | None = None, mbti_type: str | None = None,
+    enneagram_type: str | None = None, mbti_type: str | None = None,
     numerology_name: str | None = None, render_map_path: str | None = None,
 ) -> None:
+    # Validate/parse up front so a bad format fails before any ephemeris
+    # work, with the same error message get_natal_chart's own dispatch
+    # would give -- one parsing path (typology.py), not two.
+    enneagram_core, enneagram_wing = parse_enneagram_input(enneagram_type) if enneagram_type else (None, None)
+    mbti_code, mbti_variant = parse_mbti_input(mbti_type) if mbti_type else (None, None)
+
     cache = ChartCache()
     cached = cache.get(birth_date, birth_time, lat, lon)
     if cached is not None:
@@ -52,12 +58,16 @@ def run_direct(
         chart_dict = chart_to_dict(chart)
         cacheable = dict(chart_dict)
         cacheable.pop("enneagram_type", None)
+        cacheable.pop("enneagram_wing", None)
         cacheable.pop("mbti_type", None)
+        cacheable.pop("mbti_variant", None)
         cacheable.pop("numerology_name", None)
         cache.set(birth_date, birth_time, lat, lon, cacheable)
 
-    chart_dict["enneagram_type"] = enneagram_type
-    chart_dict["mbti_type"] = mbti_type.strip().upper() if mbti_type else None
+    chart_dict["enneagram_type"] = enneagram_core
+    chart_dict["enneagram_wing"] = enneagram_wing
+    chart_dict["mbti_type"] = mbti_code
+    chart_dict["mbti_variant"] = mbti_variant
     chart_dict["numerology_name"] = numerology_name
 
     if chart_dict["errors"]:
@@ -73,7 +83,7 @@ def run_direct(
     # normalization -- see agent_loop.py's module docstring for why this
     # can't just call score_wealth() directly when numerology is involved.
     asp_total, asp_log = score_aspects(nc.positions, nc.weights, nc.star_positions)
-    dig_total, dig_log = score_dignities(nc.positions, nc.weights, nc.body_info)
+    dig_total, dig_log = score_dignities(nc.positions, nc.weights, nc.body_info, nc.dignity_only_bodies)
     numerology_boost = 0.0
     numerology_log = None
     if numerology_name:
@@ -156,16 +166,50 @@ def run_direct(
     print(json.dumps(output, indent=2))
 
 
+def prompt_for_typology() -> tuple[str | None, str | None]:
+    """Interactive CLI prompt for Enneagram + MBTI type, run before the
+    agent conversation starts. Validates with the exact same parsing
+    functions get_natal_chart's dispatch uses, so a value accepted here
+    is guaranteed valid there too -- loops on bad input rather than
+    passing it through. Returns the raw validated strings, unparsed
+    (get_natal_chart does its own parsing from the same raw format)."""
+    print("Quick setup -- Enneagram and MBTI type (used for an optional")
+    print("resonance boost against your chart; skip either with N/A).\n")
+
+    enneagram_raw = None
+    while enneagram_raw is None:
+        raw = input("Enneagram type (e.g. 7w8, or 9, or N/A): ").strip()
+        try:
+            parse_enneagram_input(raw)
+            enneagram_raw = raw
+        except ValueError as exc:
+            print(f"  {exc}\n")
+
+    mbti_raw = None
+    while mbti_raw is None:
+        raw = input("MBTI type (e.g. INTJ-A, INTJ-T, or just INTJ, or N/A): ").strip()
+        try:
+            parse_mbti_input(raw)
+            mbti_raw = raw
+        except ValueError as exc:
+            print(f"  {exc}\n")
+
+    print()
+    return enneagram_raw, mbti_raw
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Wealth algorithm agent CLI")
     parser.add_argument("--direct", nargs=4,
                          metavar=("BIRTH_DATE", "BIRTH_TIME", "LATITUDE", "LONGITUDE"),
                          help="Run chart+score directly without the Anthropic agent, "
                               "e.g. --direct 1994-03-21 14:30:00 40.7128 -74.0060")
-    parser.add_argument("--enneagram", type=int, metavar="TYPE",
-                         help="Optional Enneagram core type (1-9), only used with --direct")
+    parser.add_argument("--enneagram", type=str, metavar="TYPE",
+                         help="Optional Enneagram type, only used with --direct. "
+                              "Formats: '7w8' (core+wing), '9' (core only), or 'N/A'.")
     parser.add_argument("--mbti", type=str, metavar="CODE",
-                         help="Optional 4-letter MBTI code, only used with --direct")
+                         help="Optional MBTI type, only used with --direct. Formats: "
+                              "'INTJ-A'/'INTJ-T' (code+variant), 'INTJ' (code only), or 'N/A'.")
     parser.add_argument("--numerology-name", type=str, metavar="NAME",
                          help="Optional name to run through the numerology cipher ring, "
                               "only used with --direct. Requires ciphers.js to be present "
@@ -174,15 +218,19 @@ def main() -> None:
                          help="Optional. Save an astrocartography map to this path, only "
                               "used with --direct. .html -> interactive (pan/zoom, toggle "
                               "planets, tooltips); .png/.svg -> static image.")
+    parser.add_argument("--skip-typology-prompt", action="store_true",
+                         help="Skip the startup Enneagram/MBTI prompt in agent mode "
+                              "(has no effect with --direct, which never prompts).")
     args = parser.parse_args()
 
     if args.direct:
-        if args.mbti and args.mbti.strip().upper() not in VALID_MBTI_CODES:
-            raise SystemExit(f"'{args.mbti}' isn't a real 4-letter MBTI code")
         birth_date, birth_time, lat, lon = args.direct
-        run_direct(birth_date, birth_time, float(lat), float(lon),
-                   enneagram_type=args.enneagram, mbti_type=args.mbti,
-                   numerology_name=args.numerology_name, render_map_path=args.render_map)
+        try:
+            run_direct(birth_date, birth_time, float(lat), float(lon),
+                       enneagram_type=args.enneagram, mbti_type=args.mbti,
+                       numerology_name=args.numerology_name, render_map_path=args.render_map)
+        except ValueError as exc:
+            raise SystemExit(str(exc))
     else:
         from agent_loop import WealthAgent
         import os
@@ -193,7 +241,27 @@ def main() -> None:
             )
         agent = WealthAgent()
         print("Wealth Agent -- true sidereal / Capricorn Prometheus framework.")
+
+        enneagram_raw = mbti_raw = None
+        if not args.skip_typology_prompt:
+            enneagram_raw, mbti_raw = prompt_for_typology()
+
         print("Ctrl+C to exit.\n")
+        if enneagram_raw or mbti_raw:
+            # Fed into the conversation as a normal user turn, not a
+            # separate API -- the model still decides when/whether to
+            # call get_natal_chart with these, same as anything else it
+            # learns mid-conversation. This just guarantees the values
+            # were asked for and validated up front, in the exact format
+            # get_natal_chart expects, rather than leaving it to chance
+            # whether the model asks or how it interprets free-form input.
+            preamble = "For reference going forward: "
+            if enneagram_raw:
+                preamble += f"my Enneagram type is {enneagram_raw}. "
+            if mbti_raw:
+                preamble += f"my MBTI type is {mbti_raw}."
+            print(f"agent> {agent.send(preamble)}\n")
+
         while True:
             try:
                 user_input = input("you> ").strip()
