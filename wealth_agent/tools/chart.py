@@ -31,6 +31,8 @@ from typing import Dict, List, Optional, Tuple
 
 import swisseph as swe
 
+from .typology import parse_enneagram_input, parse_mbti_input
+
 # ---------------------------------------------------------------------------
 # Ephemeris setup -- ported from setup_ephemeris(). sefstars.txt is
 # auto-downloaded on first use, exactly as your script does, from the same
@@ -39,6 +41,7 @@ import swisseph as swe
 # or elsewhere, per your Windows/OneDrive portability preference.
 # ---------------------------------------------------------------------------
 _SEFSTARS_URL = "https://github.com/aloistr/swisseph/raw/master/ephe/sefstars.txt"
+_SEAS_URL = "https://raw.githubusercontent.com/aloistr/swisseph/master/ephe/seas_18.se1"
 EPHE_DIR = Path(__file__).resolve().parent.parent / "ephe"
 
 _ephemeris_ready = False
@@ -46,12 +49,24 @@ _ephemeris_ready = False
 
 def setup_ephemeris(ephe_dir: Optional[str] = None) -> None:
     """Locate/create the ephemeris directory, register it with pyswisseph,
-    and download sefstars.txt if it isn't already present. Idempotent --
-    safe to call multiple times (e.g. once per chart) without re-downloading."""
+    and download sefstars.txt + seas_18.se1 if not already present.
+    Idempotent -- safe to call multiple times (e.g. once per chart)
+    without re-downloading.
+
+    seas_18.se1 (Chiron's asteroid ephemeris, 1800-2400AD -- ample for any
+    realistic birth date) is fetched separately from the main planets: the
+    10 classical/modern planets fall back to pyswisseph's built-in Moshier
+    approximation automatically when their own data files are missing (why
+    this project never needed to fetch sepl_18.se1/semo_18.se1 explicitly),
+    but Chiron has no such fallback -- swe.calc_ut raises outright without
+    this exact file present. Confirmed directly, not assumed: an earlier
+    version of this function didn't fetch it, and calc_ut's own error
+    message named the missing file precisely."""
     global _ephemeris_ready
     ephe_path = Path(ephe_dir).expanduser().resolve() if ephe_dir else EPHE_DIR
     ephe_path.mkdir(parents=True, exist_ok=True)
     stars_file = ephe_path / "sefstars.txt"
+    seas_file = ephe_path / "seas_18.se1"
 
     if not stars_file.exists():
         try:
@@ -60,6 +75,14 @@ def setup_ephemeris(ephe_dir: Optional[str] = None) -> None:
             # Non-fatal: chart/planet calc still works, only fixed stars
             # are affected, and calc_stars() reports the miss per-star.
             print(f"  [!] sefstars.txt download failed: {exc}")
+
+    if not seas_file.exists():
+        try:
+            urllib.request.urlretrieve(_SEAS_URL, str(seas_file))
+        except Exception as exc:
+            # Non-fatal: only Chiron's position is affected, and
+            # calc_chiron_rahu_ketu() reports the miss like calc_stars() does.
+            print(f"  [!] seas_18.se1 download failed: {exc}")
 
     swe.set_ephe_path(str(ephe_path))
     _ephemeris_ready = True
@@ -171,6 +194,69 @@ def sign_sidereal_13(sid_lon: float, ayanamsa: float) -> Tuple[str, float]:
     return result_name, (sid_lon - result_start) % 360.0
 
 
+# ---------------------------------------------------------------------------
+# HOUSE SYSTEM -- FAITHFUL PORT from wealth_algorithm_updated_house_system.py.
+# Whole-sign houses starting at Sagittarius (matching the Cosmic Calendar's
+# own year-start convention, not the traditional Aries start). House 12 is
+# a genuine two-constellation case: Scorpio is one of the narrowest IAU
+# constellations (~5.3deg wide) with Ophiuchus immediately following it
+# before Sagittarius resumes, so House 12 covers that Scorpio -> Ophiuchus
+# transition -- ruled by Pluto while in Scorpio, nominally by Chiron while
+# in Ophiuchus.
+#
+# This resolves a gap flagged in every earlier version of this project:
+# wealth_algorithm.py's own README described a house system that was
+# absent from every wealth_algorithm.py upload before this one, and every
+# house-related field in this project (gates.py, gate_calendar_bridge.py)
+# returned None with a TODO pointing at exactly this table. Unlike that
+# earlier state, Chiron is now an actually-computed body (see
+# calc_chiron_rahu_ketu above) rather than label-only.
+# ---------------------------------------------------------------------------
+HOUSES: Dict[int, List[Tuple[str, str]]] = {
+    1:  [("Sagittarius", "Jupiter")],
+    2:  [("Capricorn",   "Saturn")],
+    3:  [("Aquarius",    "Uranus")],
+    4:  [("Pisces",      "Neptune")],
+    5:  [("Aries",       "Mars")],
+    6:  [("Taurus",      "Venus")],
+    7:  [("Gemini",      "Mercury")],
+    8:  [("Cancer",      "Moon")],
+    9:  [("Leo",         "Sun")],
+    10: [("Virgo",       "Venus")],     # custom rulership, matches RULERSHIPS
+    11: [("Libra",       "Mercury")],   # custom rulership, matches RULERSHIPS
+    12: [("Scorpio", "Pluto"), ("Ophiuchus", "Chiron")],
+}
+
+# constellation/sign name -> house number. Covers all 13 sidereal
+# constellations (12 standard signs + Ophiuchus); in tropical mode only 12
+# of these keys are ever reachable, since sign_tropical() never returns
+# "Ophiuchus".
+SIGN_TO_HOUSE: Dict[str, int] = {
+    sign: house
+    for house, entries in HOUSES.items()
+    for sign, _planet in entries
+}
+
+# constellation/sign name -> its house ruler. Scorpio and Ophiuchus each
+# keep their own entry despite sharing a house number.
+HOUSE_RULER: Dict[str, str] = {
+    sign: planet
+    for entries in HOUSES.values()
+    for sign, planet in entries
+}
+
+
+def house_of_sign(sign: str) -> Optional[int]:
+    """House number (1-12) for a constellation/sign name, or None if unrecognized."""
+    return SIGN_TO_HOUSE.get(sign)
+
+
+def house_for_longitude(sid_lon: float, ayanamsa: float) -> Optional[int]:
+    """House number (1-12) for a raw sidereal ecliptic longitude."""
+    sign, _deg = sign_sidereal_13(sid_lon, ayanamsa)
+    return SIGN_TO_HOUSE.get(sign)
+
+
 def get_julian_day(year: int, month: int, day: int, hour: float) -> float:
     return swe.julday(year, month, day, hour)
 
@@ -231,6 +317,72 @@ def calc_selena(bml_lon: float) -> float:
     return (bml_lon + 180.0) % 360.0
 
 
+# ---------------------------------------------------------------------------
+# CHIRON / RAHU / KETU -- new, from your chat message, not any uploaded
+# script. Computed SEPARATELY from PLANET_CATALOG/all_body_positions on
+# purpose: those feed chart.positions, which score_aspects iterates over
+# for EVERY planet-planet and planet-star pair. Adding these 3 there would
+# silently expand aspect scoring to many new pairs (Chiron-Sun, Chiron-
+# every star, Rahu-Ketu, ...) using an invented weight -- not something you
+# asked for, and a materially bigger change than "add their dignities."
+# These bodies exist for dignity evaluation (score_dignities, extended
+# below) and sign/house lookup only.
+#
+# Rahu/Ketu use the MEAN node, not the true/osculating node -- the
+# standard convention in sidereal/Vedic astrology, which this project's
+# ayanamsa-based sign system already follows throughout. Ketu is exactly
+# opposite Rahu by definition (the Moon's two orbital-plane crossings),
+# not a separately measured body.
+#
+# Chiron needs seas_18.se1 specifically (see setup_ephemeris's docstring
+# for why that's a separate download from the main planet files) --
+# missing/unreachable is reported as an error and Chiron is simply
+# omitted, matching calc_stars()'s per-item degradation, not a crash.
+# ---------------------------------------------------------------------------
+def calc_chiron_rahu_ketu(
+    jd: float, sidereal: bool = False
+) -> Tuple[Dict[str, dict], List[str]]:
+    """Chiron, Rahu, Ketu -- sign placement info only (lon/sign/deg_in_sign),
+    same shape as all_body_positions()'s per-body info dict. Returns
+    (info, errors)."""
+    flags = swe.FLG_SWIEPH | swe.FLG_SPEED
+    if sidereal:
+        swe.set_sid_mode(swe.SIDM_LAHIRI)
+        flags |= swe.FLG_SIDEREAL
+    ayana = swe.get_ayanamsa_ut(jd) if sidereal else 0.0
+
+    lons: Dict[str, float] = {}
+    errors: List[str] = []
+
+    try:
+        xx, _ret = swe.calc_ut(jd, swe.CHIRON, flags)
+        lons["Chiron"] = xx[0] % 360.0
+    except swe.Error as exc:
+        errors.append(f"Chiron: {exc}")
+
+    xx, _ret = swe.calc_ut(jd, swe.MEAN_NODE, flags)
+    rahu_lon = xx[0] % 360.0
+    lons["Rahu"] = rahu_lon
+    lons["Ketu"] = (rahu_lon + 180.0) % 360.0
+
+    info: Dict[str, dict] = {}
+    for name, body_lon in lons.items():
+        if sidereal:
+            sign, deg = sign_sidereal_13(body_lon, ayana)
+            house = house_of_sign(sign)
+        else:
+            sign, deg = sign_tropical(body_lon)
+            house = None  # whole-sign house table is keyed on sidereal 13-sign names
+        info[name] = {
+            "lon": round(body_lon, 6),
+            "sign": sign,
+            "deg_in_sign": round(deg, 4),
+            "house": house,
+        }
+
+    return info, errors
+
+
 def _fetch_star(name: str, jd: float, flags: int) -> Optional[float]:
     """Resolve a fixed star longitude, trying the primary catalog name
     then its fallback (if any)."""
@@ -286,13 +438,16 @@ def all_body_positions(
     for name, body_lon in lons.items():
         if sidereal:
             sign, deg = sign_sidereal_13(body_lon, ayana)
+            house = house_of_sign(sign)
         else:
             sign, deg = sign_tropical(body_lon)
+            house = None  # whole-sign house table is keyed on sidereal 13-sign names
         info[name] = {
             "lon": round(body_lon, 6),
             "sign": sign,
             "deg_in_sign": round(deg, 4),
             "retro": retro.get(name, False),
+            "house": house,
         }
 
     return lons, weights, info, errors
@@ -311,7 +466,14 @@ class NatalChart:
     numerology_name is the same idea: the name to run through the
     numerology cipher ring (tools/numerology.py) -- defaults to whatever
     label the chart is stored under if not given a real name, matching
-    wealth_algorithm.py's own --numerology-name-falls-back-to---name CLI default."""
+    wealth_algorithm.py's own --numerology-name-falls-back-to---name CLI default.
+
+    enneagram_wing / mbti_variant are GIVEN too, parsed out of the same
+    input string ("7w8" -> core 7 + wing 8; "INTJ-A" -> code INTJ +
+    variant A) -- see get_natal_chart's docstring for the accepted input
+    formats. Descriptive only, same as the core values: no wing- or
+    variant-specific resonance mechanic was specified in chat, so
+    typology_resonance() still scores off enneagram_type/mbti_type alone."""
     birth_date: str
     birth_time: str
     latitude: float
@@ -324,8 +486,11 @@ class NatalChart:
     weights: Dict[str, int] = field(default_factory=dict)
     body_info: Dict[str, dict] = field(default_factory=dict)
     star_positions: Dict[str, float] = field(default_factory=dict)
+    dignity_only_bodies: Dict[str, dict] = field(default_factory=dict)
     enneagram_type: Optional[int] = None
+    enneagram_wing: Optional[int] = None
     mbti_type: Optional[str] = None
+    mbti_variant: Optional[str] = None
     numerology_name: Optional[str] = None
     errors: List[str] = field(default_factory=list)
 
@@ -336,7 +501,7 @@ def get_natal_chart(
     latitude: float,
     longitude: float,
     sidereal: bool = True,
-    enneagram_type: Optional[int] = None,
+    enneagram_type: Optional[str] = None,
     mbti_type: Optional[str] = None,
     numerology_name: Optional[str] = None,
 ) -> NatalChart:
@@ -348,8 +513,13 @@ def get_natal_chart(
         birth_date: "YYYY-MM-DD"
         birth_time: "HH:MM:SS" (24hr, UT) -- matches your script's format
         latitude / longitude: birth location, decimal degrees
-        enneagram_type: GIVEN, not computed -- 1-9, or None if not stated
-        mbti_type: GIVEN, not computed -- 4-letter code, or None if not stated
+        enneagram_type: GIVEN, not computed. "7w8" (wing known), "9"
+            (wing unknown), or "N/A"/None (type itself unknown). See
+            tools/typology.py's parse_enneagram_input() for exact rules
+            (wing must be numerically adjacent to the core type).
+        mbti_type: GIVEN, not computed. "INTJ-A", "INTJ-T" (Assertive/
+            Turbulent known), "INTJ" (unknown), or "N/A"/None (type
+            itself unknown). See parse_mbti_input().
         numerology_name: GIVEN -- the name to run through the numerology
             cipher ring, or None to skip that tier entirely
     """
@@ -366,8 +536,11 @@ def get_natal_chart(
     for star in missing_stars:
         errors.append(f"Fixed star '{star}' not found in sefstars.txt -- skipped.")
 
-    if mbti_type is not None:
-        mbti_type = mbti_type.strip().upper()
+    dignity_only_bodies, dok_errors = calc_chiron_rahu_ketu(jd, sidereal)
+    errors.extend(dok_errors)
+
+    enneagram_core, enneagram_wing = parse_enneagram_input(enneagram_type) if enneagram_type is not None else (None, None)
+    mbti_code, mbti_variant = parse_mbti_input(mbti_type) if mbti_type is not None else (None, None)
 
     asc = calc_ascendant(jd, latitude, longitude, sidereal)
     day = is_day_chart(positions.get("Sun", 0.0), asc)
@@ -377,10 +550,12 @@ def get_natal_chart(
         latitude=latitude, longitude=longitude,
         julian_day=jd, sidereal=sidereal,
         ascendant=asc, is_day=day,
-        enneagram_type=enneagram_type, mbti_type=mbti_type,
+        enneagram_type=enneagram_core, enneagram_wing=enneagram_wing,
+        mbti_type=mbti_code, mbti_variant=mbti_variant,
         numerology_name=numerology_name,
         positions=positions, weights=weights, body_info=body_info,
-        star_positions=star_positions, errors=errors,
+        star_positions=star_positions, dignity_only_bodies=dignity_only_bodies,
+        errors=errors,
     )
 
 
@@ -397,9 +572,12 @@ def chart_to_dict(chart: NatalChart) -> dict:
         "ascendant": round(chart.ascendant, 4),
         "is_day_chart": chart.is_day,
         "enneagram_type": chart.enneagram_type,
+        "enneagram_wing": chart.enneagram_wing,
         "mbti_type": chart.mbti_type,
+        "mbti_variant": chart.mbti_variant,
         "numerology_name": chart.numerology_name,
         "bodies": chart.body_info,
+        "dignity_only_bodies": chart.dignity_only_bodies,
         "fixed_stars": {s: round(v, 6) for s, v in chart.star_positions.items()},
         "errors": chart.errors,
     }
