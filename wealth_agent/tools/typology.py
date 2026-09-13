@@ -167,6 +167,70 @@ assert len(VALID_MBTI_CODES) == 16, f"expected all 16 MBTI types, got {len(VALID
 
 
 # ---------------------------------------------------------------------------
+# INPUT PARSING -- from your chat message, not any uploaded script. Accepts
+# the raw string a person types (e.g. from the new startup prompt) and
+# splits it into the CORE value (already used everywhere in this module's
+# scoring) plus an optional wing/variant, which is new, descriptive-only
+# data: no ruling-planet-style resonance mechanic was specified for wing
+# or A/T, so none is invented here -- they're carried through for display,
+# not scored. Enneagram wing must be numerically adjacent to the core type
+# (standard Enneagram convention: type 7 can only wing to 6 or 8, wrapping
+# 9<->1) -- checked here rather than silently accepted, since an
+# impossible wing combination is much more likely a typo than an
+# intentional unconventional claim.
+# ---------------------------------------------------------------------------
+def parse_enneagram_input(raw: str) -> Tuple[Optional[int], Optional[int]]:
+    """'7w8' -> (7, 8); '9' -> (9, None); 'N/A' (case-insensitive, or
+    blank) -> (None, None). Raises ValueError on anything else malformed."""
+    raw = raw.strip()
+    if raw == "" or raw.upper() in ("N/A", "NA", "UNKNOWN"):
+        return None, None
+
+    if "w" in raw.lower():
+        core_str, wing_str = raw.lower().split("w", 1)
+        try:
+            core, wing = int(core_str), int(wing_str)
+        except ValueError:
+            raise ValueError(f"'{raw}' isn't a valid Enneagram type -- expected XwX (e.g. '7w8'), a plain number, or N/A")
+        if not (1 <= core <= 9) or not (1 <= wing <= 9):
+            raise ValueError(f"Enneagram type and wing must each be 1-9, got '{raw}'")
+        if wing not in ((core % 9) + 1, ((core - 2) % 9) + 1):
+            raise ValueError(
+                f"'{raw}': a wing must be numerically adjacent to the core type "
+                f"(type {core} can only wing to {((core - 2) % 9) + 1} or {(core % 9) + 1})"
+            )
+        return core, wing
+
+    try:
+        core = int(raw)
+    except ValueError:
+        raise ValueError(f"'{raw}' isn't a valid Enneagram type -- expected XwX (e.g. '7w8'), a plain number, or N/A")
+    if not (1 <= core <= 9):
+        raise ValueError(f"Enneagram type must be 1-9, got '{raw}'")
+    return core, None
+
+
+def parse_mbti_input(raw: str) -> Tuple[Optional[str], Optional[str]]:
+    """'INTJ-A' -> ('INTJ', 'A'); 'INTJ-T' -> ('INTJ', 'T'); 'INTJ' ->
+    ('INTJ', None); 'N/A' (case-insensitive, or blank) -> (None, None).
+    Raises ValueError on anything else malformed."""
+    raw = raw.strip().upper()
+    if raw == "" or raw in ("N/A", "NA", "UNKNOWN"):
+        return None, None
+
+    if "-" in raw:
+        code, variant = raw.split("-", 1)
+        if variant not in ("A", "T"):
+            raise ValueError(f"'{raw}': the suffix after '-' must be A (Assertive) or T (Turbulent)")
+    else:
+        code, variant = raw, None
+
+    if code not in VALID_MBTI_CODES:
+        raise ValueError(f"'{code}' isn't a real 4-letter MBTI code")
+    return code, variant
+
+
+# ---------------------------------------------------------------------------
 # RESONANCE -- ported concept from the Gate/month-ruler boost pattern
 # already in this project, applied here for the first time to GIVEN
 # (self-reported) rather than computed data. Uses ENNEAGRAM_CORE /
