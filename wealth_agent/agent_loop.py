@@ -139,6 +139,8 @@ from tools.typology import (
     MBTI_CONSTELLATIONS,
     MBTI_BY_CONSTELLATION,
     VALID_MBTI_CODES,
+    parse_enneagram_input,
+    parse_mbti_input,
 )
 from tools.mayan_calendar import date_to_tzolkin, tree_of_life
 from tools.numerology import (
@@ -147,6 +149,8 @@ from tools.numerology import (
     numerology_profile_to_dict,
     ciphers_js_available,
     DEFAULT_CIPHERS_JS_PATH,
+    compute_core_numerology_profile,
+    core_numerology_profile_to_dict,
 )
 from tools import cardology
 from tools import tarot
@@ -172,15 +176,40 @@ placements in tropical terms.
 Tracked bodies: Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, \
 Neptune, Pluto, True Black Moon Lilith, Lot of Fortune, Lot of Spirit, \
 White Moon Selena, plus 30 fixed stars/deep-space points (incl. Galactic \
-Center, Super Galactic Center, and the Solar Apex). Chiron is NOT a \
-tracked body here -- it only labels Ophiuchus's traditional rulership. \
-Don't claim a Chiron position exists or was computed.
+Center, Super Galactic Center, and the Solar Apex). Chiron, Rahu (mean \
+North Node), and Ketu (mean South Node) are ALSO now tracked, but only \
+for dignity evaluation and sign/house placement -- NOT for aspects. They \
+deliberately don't appear in aspect_log or get an aspect orb weight: \
+adding them to full aspect scoring would mean inventing a weight with no \
+grounding, a bigger change than what was asked for. If asked "what aspects \
+does Chiron make," say plainly that Chiron/Rahu/Ketu aren't part of aspect \
+scoring, only dignity -- don't compute aspects for them on the fly.
 
 Custom rulerships: Venus rules Virgo, Mercury rules Libra (in addition to \
 their traditional signs). Aspects include three metallic-ratio angles \
 (Golden, Silver, Bronze) alongside the standard set -- a single pair of \
 bodies CAN trigger more than one aspect simultaneously if orbs overlap; \
 that's expected, not a bug to paper over.
+
+DIGNITY SYSTEM covers all 15 bodies above (10 classical/modern + Chiron/ \
+Rahu/Ketu/True BML/White Moon Selena) -- domicile, exaltation, detriment, \
+fall for each, feeding score_wealth's dig_bonus automatically via \
+score_dignities. Mercury/Venus/Neptune's exaltations (Aquarius/Capricorn/ \
+Cancer) differ from traditional Western astrology (Virgo/Pisces/Leo) -- \
+this is intentional, part of this system's own framework, not an error to \
+correct if asked. Chiron/Rahu/Ketu/True BML/White Moon Selena's dignities \
+are explicitly "functional/esoteric" rulerships within this custom system, \
+not universally recognized ones -- say so if asked, don't present them as \
+traditional astrology. SIGN_DIGNITY_ARCHITECTURE (tools/scoring.py) gives \
+each sign's notable dignity placements for quick reference -- Ophiuchus's \
+entry ("Serpent Gate / Transmutation") is thematic, not a derived dignity \
+(no body has any dignity in Ophiuchus in this system).
+
+HOUSE SYSTEM: whole-sign houses, House 1 = Sagittarius (matching the \
+Cosmic Calendar's own year start, not the traditional Aries start), \
+House 12 covering both Scorpio and Ophiuchus. Every body's "house" field \
+now populates for real (a gap in earlier versions of this project is \
+resolved) -- present it plainly, it's not a placeholder.
 
 Always call get_natal_chart before score_wealth for a new person -- \
 score_wealth reads the previously stored chart by label rather than \
@@ -197,25 +226,30 @@ reconcile them into one system. score_wealth's boost pipeline includes a \
 day-gate tier (x1.15): unlike the month-ruler and suit-element tiers \
 (both evaluated at the chart's own birth date), the day-gate tier compares \
 the chart against the Sun's CURRENTLY TRANSITING Gate by default -- it's a \
-"does this chart resonate with today" check, not a birth-data check. \
-HOUSE FIELDS ARE CURRENTLY UNAVAILABLE: every "house" field returns None. \
-The uploaded wealth_algorithm.py has no house system yet, despite one \
-being described in accompanying documentation -- say so plainly if asked \
-about a body's House rather than guessing or inventing one.
+"does this chart resonate with today" check, not a birth-data check.
 
-Enneagram/MBTI typology: enneagram_type and mbti_type on a chart are \
-GIVEN facts the person states about themselves -- never infer, guess, or \
-compute one from a chart. If neither is stated, don't bring the topic up \
-unprompted. When at least one is stated, score_wealth automatically checks \
-it for resonance (a four-tier boost, after month-ruler/suit-element/day- \
-gate): does the type's ruling planet show up active in the chart, and does \
-any tracked body sit in one of the type's constellations on a separate, \
-independent 13-constellation wheel (Sagittarius=0 sidereal degrees -- NOT \
-the same boundaries as the regular 13-sign chart, by design, the same way \
-the Gate wheel doesn't share edges with it either). The source data for \
-this wheel has real gaps and inconsistencies between its two reference \
-images -- if asked why a specific cell looks off, say so plainly rather \
-than smoothing over it.
+Enneagram/MBTI typology: GIVEN facts the person states about themselves -- \
+never infer, guess, or compute one. If neither is stated, don't bring the \
+topic up unprompted (outside the startup prompt in main.py's agent mode, \
+which asks once upfront). ACCEPTED FORMATS, exact: Enneagram is "7w8" \
+(core+wing, wing must be numerically adjacent to the core -- type 7 can \
+only wing to 6 or 8) or "9" (core only) or "N/A"; MBTI is "INTJ-A"/"INTJ-T" \
+(code+Assertive/Turbulent) or "INTJ" (code only) or "N/A". Reject/re-ask on \
+anything else rather than guessing what was meant -- get_natal_chart's \
+error message states exactly what's wrong (e.g. a non-adjacent wing) so \
+relay that back rather than paraphrasing. Wing and A/T variant are stored \
+(enneagram_wing, mbti_variant) but NOT scored -- no resonance mechanic was \
+specified for them, only for the core type/code, so score_wealth's typology \
+boost still runs off enneagram_type/mbti_type alone. When at least the core \
+is stated, score_wealth automatically checks it for resonance (a four-tier \
+boost, after month-ruler/suit-element/day-gate): does the type's ruling \
+planet show up active in the chart, and does any tracked body sit in one \
+of the type's constellations on a separate, independent 13-constellation \
+wheel (Sagittarius=0 sidereal degrees -- NOT the same boundaries as the \
+regular 13-sign chart, by design, the same way the Gate wheel doesn't \
+share edges with it either). The source data for this wheel has real gaps \
+and inconsistencies between its two reference images -- if asked why a \
+specific cell looks off, say so plainly rather than smoothing over it.
 
 Mayan Tzolkin: get_mayan_sign and get_mayan_tree_of_life work from a date \
 alone (birth_date, today, or any other date) -- no chart needed, and \
@@ -226,6 +260,20 @@ verified Tzolkin math -- present it plainly. The Tree of Life's four \
 outer positions (past/future/masculine/feminine) are explicitly a \
 constructed interpretation, not verified against any real source -- say \
 so if asked, don't present them with the confidence of the center reading.
+
+Core Pythagorean numerology (get_core_numerology_profile): Life Path, \
+Attitude, Expression, Soul Urge, Personality, Maturity, plus Universal \
+Day/Month/Year and Personal Day/Month/Year for a target date. Distinct \
+from get_numerology_profile's 15-cipher irrational-constant ring (which \
+stays wired into score_wealth's additive boost, unchanged) -- this one \
+uses the standard Pythagorean letter table and is NOT wired into \
+score_wealth at all; report it descriptively. Every number reduces to a \
+single digit OR a master number (11/22/33/44) EXCEPT Attitude, which \
+reduces to a single digit only, by design -- don't "correct" an \
+unreduced-looking Attitude value that happens to be e.g. 11. Ask for \
+first/last name (middle names and suffix optional) and birth date; \
+target_date defaults to birth_date if not given -- offer to use today's \
+date for "what's my personal year right now"-type questions.
 
 Numerology: numerology_name on a chart is GIVEN, same as enneagram_type/ \
 mbti_type -- ask, don't infer. Unlike every other boost tier, numerology's \
@@ -306,12 +354,22 @@ TOOLS = [
                     "description": "Short handle to recall this chart later, e.g. 'self' or 'partner'.",
                 },
                 "enneagram_type": {
-                    "type": "integer",
-                    "description": "Optional. The person's self-known Enneagram core type, 1-9. Omit if not stated.",
+                    "type": "string",
+                    "description": (
+                        "Optional. The person's self-known Enneagram type. Formats: "
+                        "'7w8' (core + wing, wing must be numerically adjacent to the "
+                        "core), '9' (core only, wing unknown), or 'N/A' if they don't "
+                        "know their type. Omit entirely only if not asked yet."
+                    ),
                 },
                 "mbti_type": {
                     "type": "string",
-                    "description": "Optional. The person's self-known 4-letter MBTI code (e.g. 'INTJ'). Omit if not stated.",
+                    "description": (
+                        "Optional. The person's self-known MBTI type. Formats: "
+                        "'INTJ-A' or 'INTJ-T' (4-letter code + Assertive/Turbulent, "
+                        "if known), 'INTJ' (code only), or 'N/A' if they don't know "
+                        "their type. Omit entirely only if not asked yet."
+                    ),
                 },
                 "numerology_name": {
                     "type": "string",
@@ -526,6 +584,39 @@ TOOLS = [
         },
     },
     {
+        "name": "get_core_numerology_profile",
+        "description": (
+            "Compute the core Pythagorean numerology profile: Life Path, "
+            "Attitude, Expression, Soul Urge, Personality, and Maturity "
+            "numbers from a person's name and birth date, plus Universal "
+            "Day/Month/Year and Personal Day/Month/Year for a target date "
+            "(defaults to the birth date if target_date is omitted -- pass "
+            "today's date, or any date, for that date's cycle numbers "
+            "instead). Distinct from get_numerology_profile's 15-cipher "
+            "irrational-constant ring -- this uses the standard Pythagorean "
+            "letter table specifically. Requires ciphers.js (that table is "
+            "read from a real cipher named 'Pythagorean' in the same file)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "first_name": {"type": "string"},
+                "last_name": {"type": "string"},
+                "middle_names": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional. Zero or more middle names, in order.",
+                },
+                "suffix": {"type": "string", "description": "Optional. Jr, III, etc."},
+                "birth_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "target_date": {
+                    "type": "string",
+                    "description": "Optional. YYYY-MM-DD. Defaults to birth_date if omitted.",
+                },
+            },
+            "required": ["first_name", "last_name", "birth_date"],
+        },
+    },
+    {
         "name": "get_cosmic_cards",
         "description": (
             "Full Cosmic Playing Card reading for a date -- Earth card plus "
@@ -722,11 +813,13 @@ def _rebuild_natal_chart(chart_dict: dict) -> NatalChart:
         julian_day=0.0,  # not needed downstream; scoring reads positions/body_info only
         sidereal=chart_dict["sidereal"],
         ascendant=chart_dict["ascendant"], is_day=chart_dict["is_day_chart"],
-        enneagram_type=chart_dict.get("enneagram_type"), mbti_type=chart_dict.get("mbti_type"),
+        enneagram_type=chart_dict.get("enneagram_type"), enneagram_wing=chart_dict.get("enneagram_wing"),
+        mbti_type=chart_dict.get("mbti_type"), mbti_variant=chart_dict.get("mbti_variant"),
         numerology_name=chart_dict.get("numerology_name"),
         positions=positions, weights=dict(_ALL_WEIGHTS),
         body_info=chart_dict["bodies"],
         star_positions=chart_dict["fixed_stars"],
+        dignity_only_bodies=chart_dict.get("dignity_only_bodies", {}),
         errors=list(chart_dict.get("errors", [])),
     )
     return nc
@@ -749,12 +842,19 @@ class WealthAgent:
                 bd, bt = tool_input["birth_date"], tool_input["birth_time"]
                 lat, lon = tool_input["latitude"], tool_input["longitude"]
                 label = tool_input["label"]
-                enneagram_type = tool_input.get("enneagram_type")
-                mbti_type = tool_input.get("mbti_type")
                 numerology_name = tool_input.get("numerology_name")
-                if mbti_type is not None and mbti_type.strip().upper() not in VALID_MBTI_CODES:
-                    return {"error": f"'{mbti_type}' isn't a real 4-letter MBTI code "
-                                      f"(valid: {sorted(VALID_MBTI_CODES)})"}
+
+                try:
+                    enneagram_core, enneagram_wing = (
+                        parse_enneagram_input(tool_input["enneagram_type"])
+                        if tool_input.get("enneagram_type") is not None else (None, None)
+                    )
+                    mbti_code, mbti_variant = (
+                        parse_mbti_input(tool_input["mbti_type"])
+                        if tool_input.get("mbti_type") is not None else (None, None)
+                    )
+                except ValueError as exc:
+                    return {"error": str(exc)}
 
                 cached = self.cache.get(bd, bt, lat, lon)
                 if cached is not None:
@@ -769,12 +869,16 @@ class WealthAgent:
                     # onto a different chart that happens to share birth data.
                     cacheable = dict(chart_dict)
                     cacheable.pop("enneagram_type", None)
+                    cacheable.pop("enneagram_wing", None)
                     cacheable.pop("mbti_type", None)
+                    cacheable.pop("mbti_variant", None)
                     cacheable.pop("numerology_name", None)
                     self.cache.set(bd, bt, lat, lon, cacheable)
 
-                chart_dict["enneagram_type"] = enneagram_type
-                chart_dict["mbti_type"] = mbti_type.strip().upper() if mbti_type else None
+                chart_dict["enneagram_type"] = enneagram_core
+                chart_dict["enneagram_wing"] = enneagram_wing
+                chart_dict["mbti_type"] = mbti_code
+                chart_dict["mbti_variant"] = mbti_variant
                 chart_dict["numerology_name"] = numerology_name
 
                 self.session.store(label, chart_dict)
@@ -795,7 +899,9 @@ class WealthAgent:
                 # your source's main() computes asp_score/dig_bonus first,
                 # then num_boost from them, then sums all three into raw.
                 asp_total, asp_log = score_aspects(nc.positions, nc.weights, nc.star_positions)
-                dig_total, dig_log = score_dignities(nc.positions, nc.weights, nc.body_info)
+                dig_total, dig_log = score_dignities(
+                    nc.positions, nc.weights, nc.body_info, nc.dignity_only_bodies
+                )
 
                 numerology_boost = 0.0
                 numerology_note = None
@@ -935,6 +1041,30 @@ class WealthAgent:
                     y, m, d = (int(p) for p in tool_input["birth_date"].split("-"))
                     profile = compute_numerology_profile(tool_input["name"], (y, m, d))
                     return numerology_profile_to_dict(profile)
+                except Exception as exc:
+                    return {"error": f"{type(exc).__name__}: {exc}"}
+
+            elif tool_name == "get_core_numerology_profile":
+                if not ciphers_js_available():
+                    return {"error": (
+                        f"ciphers.js isn't available at {DEFAULT_CIPHERS_JS_PATH}. "
+                        f"Expression/Soul Urge/Personality read the standard "
+                        f"Pythagorean letter table from a cipher literally named "
+                        f"'Pythagorean' in that file -- can't compute without it."
+                    )}
+                try:
+                    by, bm, bd_ = (int(p) for p in tool_input["birth_date"].split("-"))
+                    target = tool_input.get("target_date")
+                    ty, tm, td = (int(p) for p in target.split("-")) if target else (by, bm, bd_)
+                    profile = compute_core_numerology_profile(
+                        first_name=tool_input["first_name"],
+                        last_name=tool_input["last_name"],
+                        middle_names=tool_input.get("middle_names"),
+                        suffix=tool_input.get("suffix"),
+                        birth_date=(by, bm, bd_),
+                        target_date=(ty, tm, td),
+                    )
+                    return core_numerology_profile_to_dict(profile)
                 except Exception as exc:
                     return {"error": f"{type(exc).__name__}: {exc}"}
 
