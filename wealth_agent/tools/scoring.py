@@ -50,11 +50,33 @@ ASPECTS: Dict[str, dict] = {
 }
 
 # ---------------------------------------------------------------------------
-# DIGNITY SYSTEM -- verbatim. Custom rulerships: Venus -> Virgo, Mercury -> Libra.
+# DIGNITY SYSTEM -- domicile/rulership unchanged from wealth_algorithm.py's
+# source (custom rulerships: Venus -> Virgo, Mercury -> Libra). EXALTATIONS
+# for Mercury/Venus/Neptune were UPDATED from the source's Virgo/Pisces/Leo
+# to Aquarius/Capricorn/Cancer, per your chat message's dignity table --
+# not a silent overwrite: the change was cross-checked against that same
+# message's "Dominant dignity architecture" per-sign table before being
+# trusted ("Aquarius: Mercury exaltation...", "Capricorn: Venus
+# exaltation...", "Cancer: ...Neptune exaltation" all independently confirm
+# the new values), which is stronger evidence than either table alone.
+#
+# Chiron/Rahu/Ketu/True BML/White Moon Selena are new additions, also from
+# that message, not any uploaded script -- your own footnote marks these
+# five as "functional/esoteric rulerships within my customized system,
+# rather than universally recognized" dignities, preserved here rather
+# than smoothed over.
+#
+# DETRIMENTS/FALLS stay fully DERIVED (opposite-sign rule), same mechanism
+# as the original 10-planet table -- verified this holds for all 5 new
+# bodies before relying on it: every detriment/fall you listed for them
+# matches what _OPP produces from their domicile/exaltation, with zero
+# exceptions. That's strong internal-consistency evidence for the table as
+# given, not just a convenient shortcut.
+#
 # Keyed on the 12-sign tropical names regardless of chart sign-mode -- a
 # planet transiting Ophiuchus (sidereal 13-sign only) gets no dignity
-# bonus/penalty in your script, since Ophiuchus isn't a key in any of
-# these four tables. Preserved as-is, not "fixed".
+# bonus/penalty, since Ophiuchus isn't a key in any of these tables.
+# Preserved as-is, not "fixed".
 # ---------------------------------------------------------------------------
 _OPP: Dict[str, str] = {s: SIGNS_12[(i + 6) % 12] for i, s in enumerate(SIGNS_12)}
 
@@ -69,13 +91,20 @@ RULERSHIPS: Dict[str, List[str]] = {
     "Uranus":   ["Aquarius"],
     "Neptune":  ["Pisces"],
     "Pluto":    ["Scorpio"],
+    "Chiron":   ["Sagittarius"],   # functional/esoteric, per your footnote
+    "Rahu":     ["Gemini"],        # functional/esoteric, per your footnote
+    "Ketu":     ["Sagittarius"],   # functional/esoteric, per your footnote
+    "True BML": ["Scorpio"],       # functional/esoteric, per your footnote
+    "White Moon Selena": ["Taurus"],  # functional/esoteric, per your footnote
 }
 
 EXALTATIONS: Dict[str, str] = {
-    "Sun":     "Aries",     "Moon":    "Taurus",     "Mercury": "Virgo",
-    "Venus":   "Pisces",    "Mars":    "Capricorn",  "Jupiter": "Cancer",
-    "Saturn":  "Libra",     "Uranus":  "Scorpio",    "Neptune": "Leo",
+    "Sun":     "Aries",     "Moon":    "Taurus",     "Mercury": "Aquarius",  # was Virgo
+    "Venus":   "Capricorn", "Mars":    "Capricorn",  "Jupiter": "Cancer",     # Venus was Pisces
+    "Saturn":  "Libra",     "Uranus":  "Scorpio",    "Neptune": "Cancer",     # was Leo
     "Pluto":   "Aries",
+    "Chiron":  "Virgo",     "Rahu":    "Taurus",     "Ketu":    "Scorpio",
+    "True BML": "Aquarius", "White Moon Selena": "Cancer",
 }
 
 DETRIMENTS: Dict[str, List[str]] = {
@@ -97,6 +126,57 @@ DIGNITY_SCORE: Dict[str, float] = {
 DIG_SYMBOL: Dict[str, str] = {
     "rulership": "*", "exaltation": "^", "fall": "v", "detriment": "x", "": " ",
 }  # ASCII-safe versions of your original star/triangle/cross glyphs
+
+# The five newly-added bodies, so callers (score_dignities' extra_bodies
+# path, agent_loop.py) can tell "new, dignity-only" apart from the
+# original 10 without hardcoding the list twice.
+NEW_DIGNITY_BODIES: Tuple[str, ...] = ("Chiron", "Rahu", "Ketu")
+# True BML and White Moon Selena were already tracked bodies before this
+# update (already in chart.positions/chart.weights) -- only their
+# EXALTATIONS/RULERSHIPS entries are new, so they're not in this tuple;
+# they already flow through score_dignities' main loop like any other
+# already-tracked body, no extra_bodies wiring needed for them.
+
+
+# ---------------------------------------------------------------------------
+# DOMINANT DIGNITY ARCHITECTURE -- per-sign summary from the same chat
+# message. DERIVED programmatically from RULERSHIPS/EXALTATIONS/DETRIMENTS/
+# FALLS above (each sign's entry is just that table's reverse index) rather
+# than hand-transcribed a second time -- both because it's genuinely
+# redundant data (every sign entry IS the planet table, reorganized) and
+# because computing it independently doubles as a cross-check: it was
+# generated and diffed against your literal wording before being trusted,
+# not assumed correct because the derivation seemed reasonable. See the
+# verification in chat. Ophiuchus is the one exception -- no planet in the
+# table above has any dignity there, so "Serpent Gate / Transmutation" is
+# carried over as the plain thematic label you gave it, not derived.
+# ---------------------------------------------------------------------------
+_PLANET_SYMBOL: Dict[str, str] = {
+    "Sun": "\u2609", "Moon": "\u263d", "Mercury": "\u263f", "Venus": "\u2640",
+    "Mars": "\u2642", "Jupiter": "\u2643", "Saturn": "\u2644", "Uranus": "\u26e2",
+    "Neptune": "\u2646", "Pluto": "\u2647", "Chiron": "\u26b7", "Rahu": "\u260a",
+    "Ketu": "\u260b", "True BML": "\u26b8", "White Moon Selena": "\u26aa",
+}
+
+
+def _build_sign_architecture() -> Dict[str, str]:
+    by_sign: Dict[str, List[str]] = {s: [] for s in SIGNS_12}
+    for planet, signs in RULERSHIPS.items():
+        for s in signs:
+            by_sign[s].append(f"{planet} domicile")
+    for planet, s in EXALTATIONS.items():
+        by_sign[s].append(f"{planet} exaltation")
+    for planet, signs in DETRIMENTS.items():
+        for s in signs:
+            by_sign[s].append(f"{planet} detriment")
+    for planet, s in FALLS.items():
+        by_sign[s].append(f"{planet} fall")
+    result = {s: " / ".join(entries) for s, entries in by_sign.items() if entries}
+    result["Ophiuchus"] = "Serpent Gate / Transmutation"  # thematic, not derived -- see docstring above
+    return result
+
+
+SIGN_DIGNITY_ARCHITECTURE: Dict[str, str] = _build_sign_architecture()
 
 
 def planet_dignity(planet: str, sign: str) -> str:
@@ -212,10 +292,21 @@ def score_dignities(
     planet_pos: Dict[str, float],
     planet_wts: Dict[str, int],
     body_info: Dict[str, dict],
+    extra_body_info: Optional[Dict[str, dict]] = None,
 ) -> Tuple[float, List[dict]]:
     """Per-planet dignity/debility bonus: DIGNITY_SCORE[status] x planet_weight.
-    Only planets with defined rulerships are evaluated (True BML and the
-    3 computed points are excluded, matching your source)."""
+
+    extra_body_info is for Chiron/Rahu/Ketu (chart.dignity_only_bodies) --
+    scored the same way but through a SEPARATE loop that doesn't require
+    planet_pos membership, since those 3 bodies are deliberately kept out
+    of chart.positions (see tools/chart.py's module comment on
+    calc_chiron_rahu_ketu for why: that dict feeds score_aspects directly,
+    and adding them there would silently pull them into full aspect
+    scoring against every other body and star using an invented weight).
+    They get the same weight default (1) as any other unweighted body --
+    no explicit weight was ever specified for them, so this uses the
+    mechanism's own existing neutral default rather than inventing a
+    specific number."""
     total = 0.0
     log: List[dict] = []
     for planet in RULERSHIPS:
@@ -231,6 +322,21 @@ def score_dignities(
             "planet": planet, "sign": sign,
             "dignity": dignity, "bonus": round(bonus, 2),
         })
+
+    for planet, info in (extra_body_info or {}).items():
+        if planet not in RULERSHIPS:
+            continue
+        sign = info.get("sign")
+        dignity = planet_dignity(planet, sign) if sign else None
+        if not dignity:
+            continue
+        bonus = DIGNITY_SCORE[dignity] * planet_wts.get(planet, 1)
+        total += bonus
+        log.append({
+            "planet": planet, "sign": sign,
+            "dignity": dignity, "bonus": round(bonus, 2),
+        })
+
     return total, log
 
 
