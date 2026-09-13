@@ -104,6 +104,14 @@ def _split_top_level(s: str) -> List[str]:
 
 
 def _strip_comments(text: str) -> str:
+    # Block comments first (e.g. the /* ... */ template example some
+    # ciphers.js files open with) -- stripping only // line comments
+    # would leave that template's own `new cipher(...)` call in place
+    # for the parser to spuriously match. Confirmed this matters against
+    # a real ciphers.js, not a hypothetical: an earlier version of this
+    # function only handled //, and a real uploaded file had exactly this
+    # kind of leading block-commented example.
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     return "\n".join(line.split("//", 1)[0] for line in text.split("\n"))
 
 
@@ -382,5 +390,290 @@ def numerology_profile_to_dict(profile: NumerologyProfile) -> dict:
                 "is_master": r.reduced in MASTER_NUMBERS,
             }
             for cname, r in profile.expression.items()
+        },
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CORE PYTHAGOREAN NUMEROLOGY -- Attitude, Expression, Soul Urge,
+# Personality, Maturity, Universal Day/Month/Year, Personal Day/Month/Year.
+#
+# Not from any uploaded script -- these formulas came from your chat
+# messages, specified precisely enough (down to master-number handling
+# per number, and which pieces feed which) that nothing here was guessed.
+# Distinct from the 15-cipher irrational-constant ring above: these are
+# the standard, specifically-named Pythagorean numerology numbers, so
+# they use the standard Pythagorean letter table (A=1..I=9, J=1..R=9,
+# S=1..Z=8) -- NOT one of the 15 irrational-constant ciphers, and not a
+# hand-typed table either. Your real ciphers.js has an entry literally
+# named "Pythagorean" with exactly these values; loaded directly from
+# there (see load_pythagorean_cipher) rather than retyped, so a real,
+# verifiable file backs this rather than a table this module invented.
+# Confirmed to match the standard table via independent web search before
+# being trusted -- see the verification in chat.
+#
+# Y is always treated as a consonant. Some traditions treat Y as a vowel
+# when it's the only vowel sound in a syllable ("myth", "rhythm") -- that
+# requires syllable-level judgment this module doesn't attempt. Simple
+# and consistent was chosen over contextual and occasionally-right;
+# flagged here rather than left implicit, since it's a real simplification,
+# not a settled convention.
+# ═══════════════════════════════════════════════════════════════════════
+VOWELS = frozenset("aeiou")
+
+_PYTHAGOREAN_CACHE: Optional[Cipher] = None
+
+
+def load_pythagorean_cipher(js_path: Optional[str] = None) -> Cipher:
+    """Extract the 'Pythagorean' cipher from ciphers.js directly -- NOT
+    via load_ciphers()/ACTIVE_CIPHERS, since adding 'Pythagorean' to that
+    15-cipher whitelist would silently pull it into score_numerology_boost's
+    irrational-constant ring (changing that ring's avg_weight and adding
+    an unintended contribution to the wealth score). This is a completely
+    separate, independent use of the same ciphers.js file and the same
+    low-level parser, for a different purpose."""
+    global _PYTHAGOREAN_CACHE
+    if _PYTHAGOREAN_CACHE is not None:
+        return _PYTHAGOREAN_CACHE
+
+    path = js_path or str(DEFAULT_CIPHERS_JS_PATH)
+    text = _strip_comments(Path(path).read_text(encoding="utf-8"))
+    for m in re.finditer(r"new cipher\(", text):
+        start = m.end() - 1
+        end = _find_matching_paren(text, start)
+        if end == -1:
+            continue
+        parts = _split_top_level(text[start + 1 : end])
+        if len(parts) < 7:
+            continue
+        name = parts[0].strip().strip("\"'")
+        if name != "Pythagorean":
+            continue
+        category = parts[1].strip().strip("\"'")
+        chars = [int(x) for x in _split_top_level(parts[5].strip()[1:-1])]
+        values = [int(x) for x in _split_top_level(parts[6].strip()[1:-1])]
+        if len(chars) != len(values):
+            raise ValueError(
+                f"'Pythagorean' cipher has {len(chars)} chars but {len(values)} "
+                f"values in {path} -- can't use it safely."
+            )
+        _PYTHAGOREAN_CACHE = Cipher(name=name, category=category,
+                                     char_map=dict(zip(chars, values)), weight=1.0)
+        return _PYTHAGOREAN_CACHE
+    raise FileNotFoundError(f"No cipher named 'Pythagorean' found in {path}")
+
+
+def reset_pythagorean_cache() -> None:
+    """Mirrors reset_cipher_cache() -- lets the agent/test suite load a
+    different ciphers.js path within one process."""
+    global _PYTHAGOREAN_CACHE
+    _PYTHAGOREAN_CACHE = None
+
+
+def _name_part_value(text: str, cipher: Cipher, filter_: str = "all") -> int:
+    """Sum of a name part's Pythagorean letter values. filter_: 'all'
+    (Expression), 'vowels' (Soul Urge), or 'consonants' (Personality, Y
+    always included here -- see module note above)."""
+    total = 0
+    for ch in text.lower():
+        if not ch.isalpha():
+            continue
+        if filter_ == "vowels" and ch not in VOWELS:
+            continue
+        if filter_ == "consonants" and ch in VOWELS:
+            continue
+        total += cipher.char_map.get(ord(ch), 0)
+    return total
+
+
+@dataclass
+class NamePartTotals:
+    """One of Expression/Soul Urge/Personality's intermediate results --
+    exposed because your own definition treats the per-part totals as
+    meaningful (unreduced), not just a computation detail."""
+    parts: List[str]
+    part_totals: List[int]   # unreduced, one per name part, in order given
+    raw_sum: int             # sum of part_totals, still unreduced
+    reduced: int             # raw_sum, reduced (master numbers preserved)
+
+
+def _name_parts_number(name_parts: List[str], filter_: str, js_path: Optional[str] = None) -> NamePartTotals:
+    cipher = load_pythagorean_cipher(js_path)
+    totals = [_name_part_value(part, cipher, filter_) for part in name_parts if part]
+    raw_sum = sum(totals)
+    return NamePartTotals(
+        parts=[p for p in name_parts if p], part_totals=totals,
+        raw_sum=raw_sum, reduced=reduce_number(raw_sum, keep_master=True),
+    )
+
+
+def expression_number(name_parts: List[str], js_path: Optional[str] = None) -> NamePartTotals:
+    """All letters of first/middle(s)/last/suffix, each part's total left
+    unreduced, then summed and reduced (master numbers preserved)."""
+    return _name_parts_number(name_parts, "all", js_path)
+
+
+def soul_urge_number(name_parts: List[str], js_path: Optional[str] = None) -> NamePartTotals:
+    """Same structure as expression_number, vowels only."""
+    return _name_parts_number(name_parts, "vowels", js_path)
+
+
+def personality_number(name_parts: List[str], js_path: Optional[str] = None) -> NamePartTotals:
+    """Same structure as expression_number, consonants only (Y included)."""
+    return _name_parts_number(name_parts, "consonants", js_path)
+
+
+def attitude_number(birth_month: int, birth_day: int) -> int:
+    """Day + month of birth, reduced to a SINGLE DIGIT -- the one number
+    in this whole system explicitly specified without master-number
+    preservation. Not an oversight: your definition says "reduce...to a
+    single-digit number", full stop, where every other definition adds
+    "or master number (11, 22, 33, 44)". Preserved as the one deliberate
+    exception, not normalized to match the others."""
+    total = sum(int(d) for d in str(birth_month)) + sum(int(d) for d in str(birth_day))
+    return reduce_number(total, keep_master=False)
+
+
+def maturity_number(life_path: int, expression: int) -> int:
+    """Life Path + Expression, reduced (master numbers preserved)."""
+    return reduce_number(life_path + expression, keep_master=True)
+
+
+def universal_day(year: int, month: int, day: int) -> int:
+    """MM+DD+YYYY of the TARGET date (not birth date) -- same digit-sum
+    method as Life Path/date_value(), applied to whatever date is being
+    asked about. Reduced, master numbers preserved."""
+    return reduce_number(date_value(year, month, day), keep_master=True)
+
+
+def universal_month(year: int, month: int) -> int:
+    """MM+YYYY of the target date, reduced (master numbers preserved)."""
+    total = sum(int(d) for d in f"{month:02d}") + sum(int(d) for d in f"{year:04d}")
+    return reduce_number(total, keep_master=True)
+
+
+def universal_year(year: int) -> int:
+    """Y+Y+Y+Y -- the four individual digits of the target year, summed
+    and reduced (master numbers preserved)."""
+    total = sum(int(d) for d in f"{year:04d}")
+    return reduce_number(total, keep_master=True)
+
+
+def personal_day(universal_day_value: int, attitude: int) -> int:
+    """Universal Day + Attitude Number, reduced (master numbers preserved)."""
+    return reduce_number(universal_day_value + attitude, keep_master=True)
+
+
+def personal_month(universal_month_value: int, attitude: int) -> int:
+    """Universal Month + Attitude Number, reduced (master numbers preserved)."""
+    return reduce_number(universal_month_value + attitude, keep_master=True)
+
+
+def personal_year(universal_year_value: int, attitude: int) -> int:
+    """Universal Year + Attitude Number, reduced (master numbers preserved)."""
+    return reduce_number(universal_year_value + attitude, keep_master=True)
+
+
+@dataclass
+class CoreNumerologyProfile:
+    """Bundles Life Path (already computed elsewhere in this module) with
+    the 5 name/date-derived core numbers plus the 6 Universal/Personal
+    numbers for one target date."""
+    first_name: str
+    middle_names: List[str]
+    last_name: str
+    suffix: Optional[str]
+    birth_date: Tuple[int, int, int]
+    target_date: Tuple[int, int, int]
+
+    life_path: int
+    life_path_planet: str
+    attitude: int
+    expression: NamePartTotals
+    soul_urge: NamePartTotals
+    personality: NamePartTotals
+    maturity: int
+    universal_day: int
+    universal_month: int
+    universal_year: int
+    personal_day: int
+    personal_month: int
+    personal_year: int
+
+
+def compute_core_numerology_profile(
+    first_name: str,
+    last_name: str,
+    birth_date: Tuple[int, int, int],
+    middle_names: Optional[List[str]] = None,
+    suffix: Optional[str] = None,
+    target_date: Optional[Tuple[int, int, int]] = None,
+    js_path: Optional[str] = None,
+) -> CoreNumerologyProfile:
+    """Full core-Pythagorean profile. target_date defaults to birth_date
+    (Universal/Personal numbers FOR the birth date itself) if not given --
+    pass today's date (or any date) to get that date's Personal Day/Month/
+    Year instead."""
+    middle_names = middle_names or []
+    target_date = target_date or birth_date
+    name_parts = [first_name] + list(middle_names) + [last_name] + ([suffix] if suffix else [])
+
+    by, bm, bd = birth_date
+    ty, tm, td = target_date
+
+    life_path_raw = date_value(by, bm, bd)
+    life_path = reduce_number(life_path_raw)
+    life_path_planet = ruling_planet(life_path)
+
+    attitude = attitude_number(bm, bd)
+    expr = expression_number(name_parts, js_path)
+    soul = soul_urge_number(name_parts, js_path)
+    pers = personality_number(name_parts, js_path)
+    maturity = maturity_number(life_path, expr.reduced)
+
+    u_day = universal_day(ty, tm, td)
+    u_month = universal_month(ty, tm)
+    u_year = universal_year(ty)
+    p_day = personal_day(u_day, attitude)
+    p_month = personal_month(u_month, attitude)
+    p_year = personal_year(u_year, attitude)
+
+    return CoreNumerologyProfile(
+        first_name=first_name, middle_names=middle_names, last_name=last_name,
+        suffix=suffix, birth_date=birth_date, target_date=target_date,
+        life_path=life_path, life_path_planet=life_path_planet,
+        attitude=attitude, expression=expr, soul_urge=soul, personality=pers,
+        maturity=maturity, universal_day=u_day, universal_month=u_month,
+        universal_year=u_year, personal_day=p_day, personal_month=p_month,
+        personal_year=p_year,
+    )
+
+
+def core_numerology_profile_to_dict(p: CoreNumerologyProfile) -> dict:
+    def _parts(nt: NamePartTotals) -> dict:
+        return {
+            "parts": nt.parts, "part_totals": nt.part_totals,
+            "raw_sum": nt.raw_sum, "reduced": nt.reduced,
+            "is_master": nt.reduced in MASTER_NUMBERS,
+        }
+    return {
+        "name": {
+            "first": p.first_name, "middle": p.middle_names,
+            "last": p.last_name, "suffix": p.suffix,
+        },
+        "birth_date": f"{p.birth_date[0]:04d}-{p.birth_date[1]:02d}-{p.birth_date[2]:02d}",
+        "target_date": f"{p.target_date[0]:04d}-{p.target_date[1]:02d}-{p.target_date[2]:02d}",
+        "life_path": {"value": p.life_path, "planet": p.life_path_planet,
+                      "is_master": p.life_path in MASTER_NUMBERS},
+        "attitude": p.attitude,   # never a master number -- see attitude_number()
+        "expression": _parts(p.expression),
+        "soul_urge": _parts(p.soul_urge),
+        "personality": _parts(p.personality),
+        "maturity": {"value": p.maturity, "is_master": p.maturity in MASTER_NUMBERS},
+        "universal": {
+            "day": p.universal_day, "month": p.universal_month, "year": p.universal_year,
+        },
+        "personal": {
+            "day": p.personal_day, "month": p.personal_month, "year": p.personal_year,
         },
     }
