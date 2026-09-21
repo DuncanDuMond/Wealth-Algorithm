@@ -396,11 +396,36 @@ def _fetch_star(name: str, jd: float, flags: int) -> Optional[float]:
     return None
 
 
-def calc_stars(jd: float) -> Tuple[Dict[str, float], List[str]]:
+def calc_stars(jd: float, sidereal: bool = False) -> Tuple[Dict[str, float], List[str]]:
     """Ecliptic longitudes for all 30 catalog fixed stars/deep-space points.
-    Returns (positions, names_not_resolved)."""
+    Returns (positions, names_not_resolved).
+
+    BUG FIX: this used to hardcode swe.FLG_SWIEPH with no sidereal option
+    at all -- meaning star positions were always computed TROPICAL and
+    then used directly as if sidereal (this project is always sidereal;
+    get_natal_chart never passes sidereal=False), a full ayanamsa's worth
+    of misalignment (~24 degrees at present) against every planet, which
+    ARE correctly sidereal-shifted. That's not a cosmetic gap -- star_positions
+    feeds score_aspects directly, so every planet-star aspect in every
+    wealth score computed by this project was checking angular separation
+    between two longitudes in different reference frames. Confirmed
+    directly before fixing, not assumed: computed Regulus both ways for a
+    real chart and found the exact ~24.66 degree gap the bug predicts (see
+    the verification in chat). Fixed by mirroring calc_planets' own
+    sidereal convention exactly (FLG_SIDEREAL + SIDM_LAHIRI), rather than
+    a manual post-hoc ayanamsa subtraction -- checked that the two methods
+    agree to within ~15 arcseconds (using the correct call order: set_sid_mode
+    before reading the ayanamsa, since get_ayanamsa_ut's result depends on
+    whatever mode was most recently set -- an ordering mistake in the first
+    version of this check gave a misleadingly large 0.88 degree gap, which
+    turned out to be comparing against the WRONG ayanamsa mode, not a real
+    discrepancy), so this isn't a second, subtly-different sidereal
+    convention living alongside the planets' own."""
     _ensure_ephemeris()
     flags = swe.FLG_SWIEPH
+    if sidereal:
+        swe.set_sid_mode(swe.SIDM_LAHIRI)
+        flags |= swe.FLG_SIDEREAL
     out: Dict[str, float] = {}
     missing: List[str] = []
     for name in STAR_CATALOG:
@@ -532,7 +557,7 @@ def get_natal_chart(
     jd = get_julian_day(y, m, d, hour_decimal)
 
     positions, weights, body_info, errors = all_body_positions(jd, latitude, longitude, sidereal)
-    star_positions, missing_stars = calc_stars(jd)
+    star_positions, missing_stars = calc_stars(jd, sidereal)
     for star in missing_stars:
         errors.append(f"Fixed star '{star}' not found in sefstars.txt -- skipped.")
 
