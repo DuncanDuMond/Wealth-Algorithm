@@ -1,83 +1,87 @@
 # Wealth Algorithm Agent
 
-This update reconciles `wealth_agent/` against the standalone files from
-the separate "64-Gate Human Design system with I Ching and elements"
-session -- and in the process of that reconciliation, catches and fixes
-a real bug in fixed-star positions that's been affecting every wealth
-score since fixed stars were first added.
+## Sidereal audit: complete
 
-## What the reconciliation found
+Following up on the `calc_stars()` bug found last update, every place in
+this codebase that touches `swe.get_ayanamsa_ut()` or
+`swe.set_sid_mode()` was checked -- not just the one that turned out to
+be broken. Five call sites total: `calc_chiron_rahu_ketu`,
+`all_body_positions`, and `gate_calendar_bridge.py`'s `day_gate()` all
+already set the sidereal mode explicitly before reading the ayanamsa,
+confirmed correct. `calc_ascendant` was the one with a real, if
+currently-harmless, issue.
 
-The 5 uploaded files (`calendar_bridge.py`, `human_design_gates.py`,
-`gate_calendar_bridge.py`, `gates.py`, `README.md`) turned out to be from
-that other session's own standalone build -- which explains the
-`ModuleNotFoundError` from last message exactly: that session had no
-visibility into this project's `tools/` package structure, so it wrote
-flat, absolute imports (`import calendar_bridge as cb`) that assume every
-file sits in one directory. That's incompatible with how this project is
-actually organized, so those files were used as a reference to verify
-against, not copied in wholesale (which would have reintroduced the same
-import error).
+**`calc_ascendant` hardened, not because it was giving a wrong answer.**
+It relied on some *earlier* call (`calc_planets`, in every actual code
+path today) having already set the sidereal mode globally, since
+`get_ayanamsa_ut()`'s result depends on whatever mode swisseph most
+recently had set. That's correct today because `all_body_positions`
+always calls `calc_planets` before `calc_ascendant` -- but it's an
+implicit dependency, not a guaranteed one, and a future call site that
+computed just the ascendant in isolation would have silently gotten a
+wrong answer, not an error. Fixed by having it set the mode itself.
+Confirmed this changes nothing about current behavior (same ascendant,
+byte-for-byte, for the standing test chart) while confirming the
+failure mode it closes: computed the ascendant in isolation after
+deliberately setting the *wrong* prior mode, and it now self-corrects
+instead of silently inheriting the wrong one.
 
-The verification was direct, not a read-through: `calendar_bridge.py`
-diffed byte-identical to what's already here. `human_design_gates.py`'s
-core data (`GATE_ELEMENTS`, the wheel sequence, the anchor point) matched
-exactly, confirmed by sweeping all 64 gate boundaries through both
-versions. For `gates.py` and `gate_calendar_bridge.py`, their *actual,
-unmodified* code was run -- with `wealth_algorithm_updated_house_system.py`
-standing in for the `wealth_algorithm` module they import -- against this
-project's package-integrated equivalents, for the same real chart. Every
-field matched: Sun's Gate/Line/House, sidereal longitude, the day-gate
-computation, all of it.
+## The three new errors: none of them are code bugs
 
-## The bug the verification actually caught
+Diagnosed by direct reproduction, not inference -- extracted a
+completely clean copy of the current files and reran exactly what
+produces each symptom:
 
-The other session's own README explicitly flagged one thing as unfixed:
-`calc_stars()` hardcoding tropical flags for every star regardless of the
-chart's sign mode. That flag was real -- and still present, unfixed,
-in this project's `tools/chart.py` too. Checked directly rather than
-assumed: computed Regulus both ways for a real chart and found a ~24.66
-degree gap, the size of the ayanamsa at that date, exactly what the bug
-predicts.
+- **`calendar_bridge` ModuleNotFoundError** -- your local
+  `tools/gate_calendar_bridge.py` still has the old absolute import.
+  Confirmed by diffing your traceback's line 52 against this project's
+  line 28, which is `from . import calendar_bridge as cb` -- different
+  line number, different import style. This file hasn't been replaced
+  with what was delivered last update.
+- **`Algorithm` ModuleNotFoundError** -- `import
+  Algorithm.wealth_agent.tools.human_design_gates as hdg` is not a line
+  this project has ever contained. "Algorithm" is the name of your
+  OneDrive project folder, not a Python package -- this has the exact
+  shape of an editor's "quick fix" auto-import suggestion built from a
+  workspace-relative file path, most likely accepted while trying to
+  resolve the first error. Your local `tools/gates.py` has been edited
+  into something new and broken, not reverted to something old.
+- **`chart.py`'s "attempted relative import with no known parent
+  package"** -- reproduced this exactly, word for word, by running
+  `python chart.py` from inside the `tools/` folder directly. This is
+  standard, unavoidable Python behavior for any file using relative
+  imports (`from . import X`) when it's executed directly instead of
+  imported as part of its package -- not something fixable in the file
+  itself, since the failure happens while Python is still processing
+  the file's own import statements, before any code in the file (a
+  main guard, a warning, anything) could run. This is almost certainly
+  from an editor's "Run current file" button being used on `chart.py`
+  (or some other file inside `tools/`) instead of running `main.py` or
+  `agent_loop.py`.
 
-**Why this matters more than a display glitch**: `calc_stars()`'s output
-feeds `score_aspects()` directly. Every wealth score this project has
-ever computed that involved a planet-star aspect was checking angular
-separation between a sidereal-corrected planet and a tropical (mislabeled
-sidereal) star -- two different reference frames, a full ayanamsa apart.
-Fixed by mirroring `calc_planets()`'s own sidereal convention exactly
-(`FLG_SIDEREAL` + `SIDM_LAHIRI`) rather than a manual post-hoc
-subtraction, and checked that the two methods agree to within ~15
-arcseconds using the correct call order -- an earlier version of that
-specific check used the wrong order (reading the ayanamsa before setting
-the sidereal mode) and showed a misleading 0.88 degree gap that turned
-out to be comparing against the wrong ayanamsa mode entirely, not a real
-discrepancy. Worth knowing since it means the fix was checked twice, not
-once: first against the wrong comparison, then corrected and re-checked
-before being trusted.
+**The fix for all three is the same, and it's not a code change**:
+delete the local `wealth_agent/` folder entirely and replace it with a
+fresh copy of what's delivered here, rather than patching individual
+files -- there's no way to know from here which other local files might
+also be stale or auto-edited. Then run only `python main.py` or `python
+agent_loop.py`, only from the `wealth_agent/` root, never a file inside
+`tools/` directly.
 
-**Real-world effect**: the test chart's `raw_score` changes with this fix
-(any chart with star-involving aspects will), since the aspect log is now
-checking genuinely different, correct angular relationships -- not a
-rounding change, a real correction.
+## New: every file in `tools/` now says so itself
 
-## Everything else: confirmed already consistent
-
-Star catalog naming quirks (Galactic Center resolves directly; Solar
-Apex and Super Galactic Center are cataloged as "Apex" and "Messier 87"
-respectively) -- already handled correctly. The house system, the Gate
-34 Selenium/Xenon correction, the gate-boundary floating-point rounding
-guard -- all already present and verified byte-for-byte against the
-guidance files' own data. Nothing needed to change for any of these; the
-reconciliation confirmed they were already right rather than finding
-more to fix.
+Since this is the second round of exactly this kind of confusion, every
+file in `tools/` now opens with an explicit note in its own docstring:
+it's part of a package, it can't be run directly, and here's what to run
+instead. Purely additive -- confirmed nothing compiles differently or
+scores differently with these in place.
 
 ## Structure
 
-Unchanged from the last delivered version except:
+Unchanged except:
 
-```text
+```
 wealth_agent/
   tools/
-    chart.py    # calc_stars() now takes a sidereal parameter and uses it correctly
+    chart.py    # calc_ascendant() now sets its own sidereal mode
+    *.py        # every file: new "don't run this directly" docstring note
 ```
