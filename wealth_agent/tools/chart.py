@@ -1,6 +1,9 @@
 """
 chart.py — Natal chart position calculations.
 
+PART OF THE tools/ PACKAGE -- do not run this file directly (`python tools/chart.py` or an editor's "Run current file" button on this file will fail with `ImportError: attempted relative import with no known parent package`, since it uses relative imports like `from . import X` that only resolve when loaded as part of the `tools` package). Run `python main.py` or `python agent_loop.py` from the wealth_agent/ root instead -- those import this module correctly as `tools.chart`.
+
+
 FAITHFUL PORT of the position-calculation logic from your uploaded
 wealth_algorithm.py (PLANET_CATALOG, COMPUTED_WEIGHTS, STAR_CATALOG,
 sign_tropical, sign_sidereal_13, calc_planets, calc_ascendant, calc_lots,
@@ -290,7 +293,20 @@ def calc_planets(jd: float, sidereal: bool = False) -> Tuple[Dict[str, float], D
 
 def calc_ascendant(jd: float, lat: float, lon: float, sidereal: bool = False) -> float:
     """Placidus Ascendant. In sidereal mode the tropical value is corrected
-    by subtracting the live Lahiri ayanamsa for this jd."""
+    by subtracting the live Lahiri ayanamsa for this jd.
+
+    Explicitly sets the sidereal mode itself now, rather than relying on
+    some earlier call (calc_planets, in every current call path) having
+    already set it -- get_ayanamsa_ut()'s result depends on whatever mode
+    was most recently set globally in the swisseph library, so this used
+    to be a correct-today, fragile-tomorrow dependency: true in every
+    actual call path right now (all_body_positions always calls
+    calc_planets first), but a future call site that computed just the
+    ascendant in isolation would have silently gotten a wrong answer, not
+    an error. Costs nothing to fix now -- setting the same mode again is a
+    no-op -- and removes the implicit ordering requirement entirely."""
+    if sidereal:
+        swe.set_sid_mode(swe.SIDM_LAHIRI)
     _, ascmc = swe.houses(jd, lat, lon, b"P")
     asc = ascmc[0]
     if sidereal:
